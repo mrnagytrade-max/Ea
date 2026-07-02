@@ -1,0 +1,201 @@
+//@version=5
+// ============================================================================
+//  EGX Premium Signals  |  مؤشر الأسهم المصرية الاحترافي
+//  Multi-confirmation entry/exit signal system tuned for EGX-listed stocks.
+//  Confluence: Trend (EMA stack + SuperTrend) + Momentum (MACD + RSI)
+//              + Trend Strength (ADX) + Volume confirmation + ATR risk levels
+// ============================================================================
+indicator("EGX Premium Signals | مؤشر الأسهم المصرية الاحترافي", shorttitle="EGX Pro Signals", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=50)
+
+// ============================== INPUTS =====================================
+grpTrend = "📈 الاتجاه — Trend"
+emaFastLen = input.int(21,  "EMA سريع (Fast)",   minval=2, group=grpTrend)
+emaMedLen  = input.int(55,  "EMA متوسط (Medium)", minval=2, group=grpTrend)
+emaSlowLen = input.int(200, "EMA بطيء (Slow)",    minval=2, group=grpTrend)
+stFactor   = input.float(3.0, "SuperTrend Factor", step=0.1, group=grpTrend, tooltip="يتحكم في حساسية خط الاتجاه المتحرك ووقف الخسارة")
+stAtrLen   = input.int(10, "SuperTrend ATR Length", group=grpTrend)
+
+grpMom = "⚡ الزخم — Momentum"
+rsiLen   = input.int(14, "فترة RSI", group=grpMom)
+rsiOB    = input.int(70, "تشبع شرائي (Overbought)", group=grpMom)
+rsiOS    = input.int(30, "تشبع بيعي (Oversold)", group=grpMom)
+macdFast = input.int(12, "MACD Fast", group=grpMom)
+macdSlow = input.int(26, "MACD Slow", group=grpMom)
+macdSig  = input.int(9,  "MACD Signal", group=grpMom)
+
+grpStrength = "💪 قوة الاتجاه — ADX"
+adxLen = input.int(14, "فترة ADX/DMI", group=grpStrength)
+adxTh  = input.int(20, "حد أدنى لقوة الاتجاه", group=grpStrength, tooltip="لا تُصدر إشارات في الأسواق العرضية (Sideways) الضعيفة")
+
+grpVol = "📊 الحجم — Volume"
+volLen  = input.int(20, "متوسط الحجم", group=grpVol)
+volMult = input.float(1.2, "معامل تأكيد الحجم", step=0.1, minval=0.5, group=grpVol, tooltip="يشترط حجم تداول أعلى من المتوسط لتأكيد الإشارة — مهم للأسهم قليلة السيولة بالبورصة المصرية")
+
+grpRisk = "🛡️ إدارة المخاطر — Risk"
+atrLen    = input.int(14, "فترة ATR", group=grpRisk)
+rrRatio   = input.float(2.0, "نسبة العائد للمخاطرة R:R", step=0.1, minval=0.5, group=grpRisk)
+
+grpStyle = "🎨 التصميم — Style"
+showDashboard = input.bool(true, "إظهار لوحة المعلومات", group=grpStyle)
+showCloud     = input.bool(true, "إظهار سحابة الاتجاه EMA", group=grpStyle)
+showBg        = input.bool(true, "تظليل خلفية الاتجاه", group=grpStyle)
+showLevels    = input.bool(true, "إظهار خطوط الدخول / الوقف / الهدف", group=grpStyle)
+dashSize      = input.string("normal", "حجم لوحة المعلومات", options=["small", "normal", "large"], group=grpStyle)
+
+// ============================== PALETTE =====================================
+colBullish   = #00E396
+colBearish   = #FF4560
+colGold      = #D4AF37
+colGoldSoft  = #F5D06F
+colTeal      = #17C3B2
+colPanelBg   = #0D1321
+colPanelBg2  = #131B2E
+colGrey      = #7F8FA6
+
+// ============================== CALCULATIONS =================================
+emaFast = ta.ema(close, emaFastLen)
+emaMed  = ta.ema(close, emaMedLen)
+emaSlow = ta.ema(close, emaSlowLen)
+
+[superTrend, superDir] = ta.supertrend(stFactor, stAtrLen)
+trendUp   = superDir < 0
+trendDown = superDir > 0
+stFlipUp   = trendUp   and superDir[1] > 0
+stFlipDown = trendDown and superDir[1] < 0
+
+emaBullStack = emaFast > emaMed and emaMed > emaSlow
+emaBearStack = emaFast < emaMed and emaMed < emaSlow
+
+rsiVal = ta.rsi(close, rsiLen)
+[macdLine, macdSignal, macdHist] = ta.macd(close, macdFast, macdSlow, macdSig)
+macdBullCross = ta.crossover(macdLine, macdSignal)
+macdBearCross = ta.crossunder(macdLine, macdSignal)
+
+[diPlus, diMinus, adxVal] = ta.dmi(adxLen, adxLen)
+strongTrend = adxVal > adxTh
+
+volSma  = ta.sma(volume, volLen)
+volConfirm = volume > volSma * volMult
+
+atrVal = ta.atr(atrLen)
+
+// ============================== SIGNAL ENGINE =================================
+longCond  = stFlipUp   and emaBullStack and macdLine > macdSignal and rsiVal > 40 and rsiVal < rsiOB and strongTrend and volConfirm
+shortCond = stFlipDown and emaBearStack and macdLine < macdSignal and rsiVal < 60 and rsiVal > rsiOS and strongTrend and volConfirm
+
+var int   posDir      = 0
+var float entryPrice  = na
+var float stopLevel   = na
+var float targetLevel = na
+var string exitReason = ""
+
+hitStopLong    = posDir == 1  and low  <= stopLevel
+hitTargetLong  = posDir == 1  and high >= targetLevel
+hitStopShort   = posDir == -1 and high >= stopLevel
+hitTargetShort = posDir == -1 and low  <= targetLevel
+
+exitLong  = posDir == 1  and (stFlipDown or hitStopLong or hitTargetLong)
+exitShort = posDir == -1 and (stFlipUp   or hitStopShort or hitTargetShort)
+
+if longCond and posDir != 1
+    posDir := 1
+    entryPrice := close
+    stopLevel := superTrend
+    targetLevel := close + (close - superTrend) * rrRatio
+
+if shortCond and posDir != -1
+    posDir := -1
+    entryPrice := close
+    stopLevel := superTrend
+    targetLevel := close - (superTrend - close) * rrRatio
+
+if exitLong
+    exitReason := hitTargetLong ? "TP" : hitStopLong ? "SL" : "FLIP"
+    posDir := 0
+
+if exitShort
+    exitReason := hitTargetShort ? "TP" : hitStopShort ? "SL" : "FLIP"
+    posDir := 0
+
+// ============================== PLOTTING =================================
+plot(emaFast, "EMA Fast", color=color.new(colTeal, 25), linewidth=1)
+plot(emaMed,  "EMA Medium", color=color.new(colGold, 25), linewidth=1)
+plot(emaSlow, "EMA Slow", color=color.new(colGrey, 15), linewidth=2)
+
+fillColor = trendUp ? color.new(colBullish, 88) : trendDown ? color.new(colBearish, 88) : color.new(colGrey, 95)
+p1 = plot(showCloud ? emaFast : na, "cloud1", display=display.none)
+p2 = plot(showCloud ? emaSlow : na, "cloud2", display=display.none)
+fill(p1, p2, color = showCloud ? fillColor : na, title="اتجاه EMA")
+
+plot(superTrend, "SuperTrend", color = trendUp ? color.new(colBullish, 0) : color.new(colBearish, 0), linewidth=2, style=plot.style_linebreak)
+
+bgcolor(showBg ? (trendUp ? color.new(colBullish, 96) : trendDown ? color.new(colBearish, 96) : na) : na, title="خلفية الاتجاه")
+
+// Entry labels
+if longCond
+    label.new(bar_index, low - atrVal * 0.6, "BUY\n" + str.tostring(close, format.mintick), style=label.style_label_up, color=color.new(colBullish, 0), textcolor=color.white, size=size.small)
+
+if shortCond
+    label.new(bar_index, high + atrVal * 0.6, "SELL\n" + str.tostring(close, format.mintick), style=label.style_label_down, color=color.new(colBearish, 0), textcolor=color.white, size=size.small)
+
+if exitLong or exitShort
+    exitColor = exitReason == "TP" ? colGold : exitReason == "SL" ? colBearish : colGrey
+    exitY = exitLong ? high + atrVal * 0.4 : low - atrVal * 0.4
+    label.new(bar_index, exitY, exitReason, style=label.style_label_left, color=color.new(exitColor, 10), textcolor=color.white, size=size.tiny)
+
+// Risk levels (entry / stop / target) for the active trade
+var line entryLine  = na
+var line stopLine   = na
+var line targetLine = na
+
+if showLevels
+    if longCond or shortCond
+        line.delete(entryLine)
+        line.delete(stopLine)
+        line.delete(targetLine)
+        entryLine  := line.new(bar_index, entryPrice, bar_index + 1, entryPrice, extend=extend.right, color=color.new(colGoldSoft, 40), style=line.style_dotted, width=1)
+        stopLine   := line.new(bar_index, stopLevel, bar_index + 1, stopLevel, extend=extend.right, color=color.new(colBearish, 30), style=line.style_dashed, width=1)
+        targetLine := line.new(bar_index, targetLevel, bar_index + 1, targetLevel, extend=extend.right, color=color.new(colBullish, 30), style=line.style_dashed, width=1)
+    if posDir == 0 and (exitLong or exitShort)
+        line.delete(entryLine)
+        line.delete(stopLine)
+        line.delete(targetLine)
+
+// ============================== DASHBOARD =================================
+tableSize = dashSize == "small" ? size.small : dashSize == "large" ? size.large : size.normal
+
+if showDashboard
+    var table dash = table.new(position.top_right, 2, 8, border_width=1)
+    table.cell(dash, 0, 0, "EGX Pro Signals", text_color=colGoldSoft, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 0, syminfo.ticker, text_color=color.white, bgcolor=colPanelBg, text_size=tableSize)
+
+    trendTxt = trendUp ? "صاعد ▲" : trendDown ? "هابط ▼" : "محايد ●"
+    trendCol = trendUp ? colBullish : trendDown ? colBearish : colGrey
+    table.cell(dash, 0, 1, "الاتجاه", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 1, trendTxt, text_color=trendCol, bgcolor=colPanelBg2, text_size=tableSize)
+
+    table.cell(dash, 0, 2, "قوة الاتجاه ADX", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 2, str.tostring(adxVal, "#.#") + (strongTrend ? " قوي" : " ضعيف"), text_color=strongTrend ? colGold : colGrey, bgcolor=colPanelBg, text_size=tableSize)
+
+    rsiCol = rsiVal > rsiOB ? colBearish : rsiVal < rsiOS ? colBullish : color.white
+    table.cell(dash, 0, 3, "RSI", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 3, str.tostring(rsiVal, "#.#"), text_color=rsiCol, bgcolor=colPanelBg2, text_size=tableSize)
+
+    table.cell(dash, 0, 4, "الحجم", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 4, volConfirm ? "مرتفع ✓" : "عادي", text_color=volConfirm ? colGold : colGrey, bgcolor=colPanelBg, text_size=tableSize)
+
+    posTxt = posDir == 1 ? "شراء ▲" : posDir == -1 ? "بيع ▼" : "لا توجد صفقة"
+    posCol = posDir == 1 ? colBullish : posDir == -1 ? colBearish : colGrey
+    table.cell(dash, 0, 5, "حالة الصفقة", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 5, posTxt, text_color=posCol, bgcolor=colPanelBg2, text_size=tableSize)
+
+    table.cell(dash, 0, 6, "وقف الخسارة", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 6, posDir != 0 ? str.tostring(stopLevel, format.mintick) : "—", text_color=colBearish, bgcolor=colPanelBg, text_size=tableSize)
+
+    table.cell(dash, 0, 7, "الهدف", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 7, posDir != 0 ? str.tostring(targetLevel, format.mintick) : "—", text_color=colBullish, bgcolor=colPanelBg2, text_size=tableSize)
+
+// ============================== ALERTS =================================
+alertcondition(longCond, title="EGX Buy Signal", message="EGX Pro Signals: BUY {{ticker}} @ {{close}}")
+alertcondition(shortCond, title="EGX Sell Signal", message="EGX Pro Signals: SELL {{ticker}} @ {{close}}")
+alertcondition(exitLong or exitShort, title="EGX Exit Signal", message="EGX Pro Signals: EXIT {{ticker}} @ {{close}}")

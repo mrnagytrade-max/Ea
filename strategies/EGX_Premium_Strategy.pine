@@ -1,0 +1,105 @@
+//@version=5
+// ============================================================================
+//  EGX Premium Strategy  |  استراتيجية الأسهم المصرية الاحترافية
+//  Backtestable version of "EGX Premium Signals" — same confluence engine
+//  (Trend + SuperTrend + MACD + RSI + ADX + Volume) wired to strategy.entry
+//  so it can be run in TradingView's Strategy Tester to validate performance
+//  on any EGX-listed stock before trading the indicator live.
+// ============================================================================
+strategy("EGX Premium Strategy | استراتيجية الأسهم المصرية", shorttitle="EGX Pro Strategy", overlay=true,
+     initial_capital=100000, currency=currency.NONE, default_qty_type=strategy.percent_of_equity, default_qty_value=10,
+     commission_type=strategy.commission.percent, commission_value=0.15, slippage=1, calc_on_every_tick=false)
+
+// ============================== INPUTS =====================================
+grpTrend = "📈 الاتجاه — Trend"
+emaFastLen = input.int(21,  "EMA سريع", minval=2, group=grpTrend)
+emaMedLen  = input.int(55,  "EMA متوسط", minval=2, group=grpTrend)
+emaSlowLen = input.int(200, "EMA بطيء", minval=2, group=grpTrend)
+stFactor   = input.float(3.0, "SuperTrend Factor", step=0.1, group=grpTrend)
+stAtrLen   = input.int(10, "SuperTrend ATR Length", group=grpTrend)
+
+grpMom = "⚡ الزخم — Momentum"
+rsiLen   = input.int(14, "فترة RSI", group=grpMom)
+rsiOB    = input.int(70, "تشبع شرائي", group=grpMom)
+rsiOS    = input.int(30, "تشبع بيعي", group=grpMom)
+macdFast = input.int(12, "MACD Fast", group=grpMom)
+macdSlow = input.int(26, "MACD Slow", group=grpMom)
+macdSig  = input.int(9,  "MACD Signal", group=grpMom)
+
+grpStrength = "💪 قوة الاتجاه — ADX"
+adxLen = input.int(14, "فترة ADX/DMI", group=grpStrength)
+adxTh  = input.int(20, "حد أدنى لقوة الاتجاه", group=grpStrength)
+
+grpVol = "📊 الحجم — Volume"
+volLen  = input.int(20, "متوسط الحجم", group=grpVol)
+volMult = input.float(1.2, "معامل تأكيد الحجم", step=0.1, minval=0.5, group=grpVol)
+
+grpRisk = "🛡️ إدارة المخاطر — Risk"
+rrRatio = input.float(2.0, "نسبة العائد للمخاطرة R:R", step=0.1, minval=0.5, group=grpRisk)
+allowLong  = input.bool(true, "السماح بصفقات الشراء (Long)", group=grpRisk)
+allowShort = input.bool(false, "السماح بصفقات البيع (Short)", group=grpRisk, tooltip="البيع على المكشوف غير متاح لمعظم الأسهم في البورصة المصرية — اتركه معطلاً إلا إذا كنت تتداول عقود مستقبلية")
+
+grpDate = "🗓️ فترة الاختبار — Backtest Window"
+useDateFilter = input.bool(false, "تفعيل فترة زمنية محددة", group=grpDate)
+startDate = input.time(timestamp("2018-01-01"), "من تاريخ", group=grpDate)
+endDate   = input.time(timestamp("2099-01-01"), "إلى تاريخ", group=grpDate)
+
+// ============================== PALETTE =====================================
+colBullish = #00E396
+colBearish = #FF4560
+colGold    = #D4AF37
+colGrey    = #7F8FA6
+
+// ============================== CALCULATIONS =================================
+emaFast = ta.ema(close, emaFastLen)
+emaMed  = ta.ema(close, emaMedLen)
+emaSlow = ta.ema(close, emaSlowLen)
+
+[superTrend, superDir] = ta.supertrend(stFactor, stAtrLen)
+trendUp   = superDir < 0
+trendDown = superDir > 0
+stFlipUp   = trendUp   and superDir[1] > 0
+stFlipDown = trendDown and superDir[1] < 0
+
+emaBullStack = emaFast > emaMed and emaMed > emaSlow
+emaBearStack = emaFast < emaMed and emaMed < emaSlow
+
+rsiVal = ta.rsi(close, rsiLen)
+[macdLine, macdSignal, macdHist] = ta.macd(close, macdFast, macdSlow, macdSig)
+
+[diPlus, diMinus, adxVal] = ta.dmi(adxLen, adxLen)
+strongTrend = adxVal > adxTh
+
+volSma = ta.sma(volume, volLen)
+volConfirm = volume > volSma * volMult
+
+inWindow = not useDateFilter or (time >= startDate and time <= endDate)
+
+longCond  = inWindow and stFlipUp   and emaBullStack and macdLine > macdSignal and rsiVal > 40 and rsiVal < rsiOB and strongTrend and volConfirm
+shortCond = inWindow and stFlipDown and emaBearStack and macdLine < macdSignal and rsiVal < 60 and rsiVal > rsiOS and strongTrend and volConfirm
+
+// ============================== TRADE EXECUTION =================================
+if longCond and allowLong
+    stopPrice = superTrend
+    targetPrice = close + (close - stopPrice) * rrRatio
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Long Exit", "Long", stop=stopPrice, limit=targetPrice)
+
+if shortCond and allowShort
+    stopPrice = superTrend
+    targetPrice = close - (stopPrice - close) * rrRatio
+    strategy.entry("Short", strategy.short)
+    strategy.exit("Short Exit", "Short", stop=stopPrice, limit=targetPrice)
+
+// Close on opposite SuperTrend flip as a safety net even if TP/SL not yet hit
+if strategy.position_size > 0 and stFlipDown
+    strategy.close("Long", comment="Trend Flip")
+if strategy.position_size < 0 and stFlipUp
+    strategy.close("Short", comment="Trend Flip")
+
+// ============================== PLOTTING =================================
+plot(emaFast, "EMA Fast", color=color.new(colGrey, 40))
+plot(emaMed,  "EMA Medium", color=color.new(colGold, 40))
+plot(emaSlow, "EMA Slow", color=color.new(colGrey, 15), linewidth=2)
+plot(superTrend, "SuperTrend", color = trendUp ? color.new(colBullish, 0) : color.new(colBearish, 0), linewidth=2)
+bgcolor(trendUp ? color.new(colBullish, 96) : trendDown ? color.new(colBearish, 96) : na)
