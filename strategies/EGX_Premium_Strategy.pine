@@ -1,4 +1,4 @@
-//@version=5
+//@version=6
 // ============================================================================
 //  EGX Premium Strategy  |  استراتيجية الأسهم المصرية الاحترافية
 //  Backtestable version of "EGX Premium Signals" — same confluence engine
@@ -6,7 +6,7 @@
 //  so it can be run in TradingView's Strategy Tester to validate performance
 //  on any EGX-listed stock before trading the indicator live.
 // ============================================================================
-strategy("EGX Premium Strategy | استراتيجية الأسهم المصرية", shorttitle="EGX Pro Strategy", overlay=true,
+strategy("EGX Premium Strategy | استراتيجية الأسهم المصرية", shorttitle="EGX Strat", overlay=true,
      initial_capital=100000, currency=currency.NONE, default_qty_type=strategy.percent_of_equity, default_qty_value=10,
      commission_type=strategy.commission.percent, commission_value=0.15, slippage=1, calc_on_every_tick=false)
 

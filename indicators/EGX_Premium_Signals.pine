@@ -1,11 +1,11 @@
-//@version=5
+//@version=6
 // ============================================================================
 //  EGX Premium Signals  |  مؤشر الأسهم المصرية الاحترافي
 //  Multi-confirmation entry/exit signal system tuned for EGX-listed stocks.
 //  Confluence: Trend (EMA stack + SuperTrend) + Momentum (MACD + RSI)
 //              + Trend Strength (ADX) + Volume confirmation + ATR risk levels
 // ============================================================================
-indicator("EGX Premium Signals | مؤشر الأسهم المصرية الاحترافي", shorttitle="EGX Pro Signals", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=50)
+indicator("EGX Premium Signals | مؤشر الأسهم المصرية الاحترافي", shorttitle="EGX Pro", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=50)
 
 // ============================== INPUTS =====================================
 grpTrend = "📈 الاتجاه — Trend"
@@ -68,8 +68,6 @@ emaBearStack = emaFast < emaMed and emaMed < emaSlow
 
 rsiVal = ta.rsi(close, rsiLen)
 [macdLine, macdSignal, macdHist] = ta.macd(close, macdFast, macdSlow, macdSig)
-macdBullCross = ta.crossover(macdLine, macdSignal)
-macdBearCross = ta.crossunder(macdLine, macdSignal)
 
 [diPlus, diMinus, adxVal] = ta.dmi(adxLen, adxLen)
 strongTrend = adxVal > adxTh
@@ -127,7 +125,7 @@ p1 = plot(showCloud ? emaFast : na, "cloud1", display=display.none)
 p2 = plot(showCloud ? emaSlow : na, "cloud2", display=display.none)
 fill(p1, p2, color = showCloud ? fillColor : na, title="اتجاه EMA")
 
-plot(superTrend, "SuperTrend", color = trendUp ? color.new(colBullish, 0) : color.new(colBearish, 0), linewidth=2, style=plot.style_linebreak)
+plot(superTrend, "SuperTrend", color = trendUp ? color.new(colBullish, 0) : color.new(colBearish, 0), linewidth=2, style=plot.style_linebr)
 
 bgcolor(showBg ? (trendUp ? color.new(colBullish, 96) : trendDown ? color.new(colBearish, 96) : na) : na, title="خلفية الاتجاه")
 
