@@ -1,9 +1,11 @@
 //@version=6
 // ============================================================================
-//  EGX Premium Signals  |  مؤشر الأسهم المصرية الاحترافي
+//  EGX Premium Signals  |  مؤشر الأسهم المصرية الاحترافي  —  Created By Arbah Markets
 //  Multi-confirmation entry/exit signal system tuned for EGX-listed stocks.
-//  Confluence: Trend (EMA stack + SuperTrend) + Momentum (MACD + RSI)
-//              + Trend Strength (ADX) + Volume confirmation + ATR risk levels
+//  Confluence: Trend (EMA stack + SuperTrend) + RMI + Momentum (MACD + RSI)
+//              + Trend Strength (ADX) + Volume + Supply/Demand + FVG + Structure
+//  Chart stays minimal by design (HMA trend ribbon + entry arrows only) —
+//  every layer's detail surfaces in the dashboard instead of on the chart.
 // ============================================================================
 indicator("EGX Premium Signals | مؤشر الأسهم المصرية الاحترافي", shorttitle="EGX Pro", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500)
 
@@ -15,6 +17,13 @@ emaSlowLen = input.int(200, "EMA بطيء (Slow)",    minval=2, group=grpTrend)
 stFactor   = input.float(3.0, "SuperTrend Factor", step=0.1, group=grpTrend, tooltip="يتحكم في حساسية خط الاتجاه المتحرك ووقف الخسارة")
 stAtrLen   = input.int(10, "SuperTrend ATR Length", group=grpTrend)
 
+grpRibbon = "🌈 الشريط اللوني — Trend Ribbon"
+showRibbon      = input.bool(true, "إظهار الشريط اللوني الاحترافي", group=grpRibbon, tooltip="خط ملوّن أنعم يتتبع السعر بدل خط SuperTrend التقليدي")
+ribbonLen       = input.int(21, "طول تجانس الشريط", minval=2, group=grpRibbon)
+ribbonGlow      = input.bool(true, "تأثير التوهج (Glow)", group=grpRibbon)
+ribbonWidth     = input.int(2, "سُمك الخط", minval=1, maxval=5, group=grpRibbon)
+showSuperTrend  = input.bool(false, "إظهار خط SuperTrend التقليدي (متدرّج)", group=grpRibbon)
+
 grpMom = "⚡ الزخم — Momentum"
 rsiLen   = input.int(14, "فترة RSI", group=grpMom)
 rsiOB    = input.int(70, "تشبع شرائي (Overbought)", group=grpMom)
@@ -22,6 +31,12 @@ rsiOS    = input.int(30, "تشبع بيعي (Oversold)", group=grpMom)
 macdFast = input.int(12, "MACD Fast", group=grpMom)
 macdSlow = input.int(26, "MACD Slow", group=grpMom)
 macdSig  = input.int(9,  "MACD Signal", group=grpMom)
+
+grpRmi = "🎯 RMI — Relative Momentum Index"
+useRmiTrend = input.bool(true, "استخدام RMI لتأكيد قوة واتجاه الحركة", group=grpRmi, tooltip="RMI أنعم من RSI لأنه يقيس الزخم عبر عدة شموع بدل شمعة واحدة — مفيد لتقليل الإشارات الوهمية في أسهم EGX قليلة السيولة")
+rmiLen      = input.int(14, "فترة تجانس RMI", minval=2, group=grpRmi)
+rmiMomLen   = input.int(5, "فترة الزخم (Momentum Length)", minval=1, group=grpRmi)
+rmiMid      = input.int(50, "خط المنتصف", minval=1, maxval=99, group=grpRmi)
 
 grpStrength = "💪 قوة الاتجاه — ADX"
 adxLen = input.int(14, "فترة ADX/DMI", group=grpStrength)
@@ -37,7 +52,6 @@ rrRatio   = input.float(2.0, "نسبة العائد للمخاطرة R:R", step=
 
 grpStyle = "🎨 التصميم — Style"
 showDashboard    = input.bool(true, "إظهار لوحة المعلومات", group=grpStyle)
-showSuperTrend   = input.bool(true, "إظهار خط الاتجاه SuperTrend", group=grpStyle)
 showEma          = input.bool(false, "إظهار متوسطات EMA على الشارت", group=grpStyle)
 showCloud        = input.bool(false, "إظهار سحابة الاتجاه EMA", group=grpStyle)
 showBg           = input.bool(false, "تظليل خلفية الاتجاه", group=grpStyle)
@@ -97,6 +111,12 @@ emaBearStack = emaFast < emaMed and emaMed < emaSlow
 
 rsiVal = ta.rsi(close, rsiLen)
 [macdLine, macdSignal, macdHist] = ta.macd(close, macdFast, macdSlow, macdSig)
+
+rmiUp   = ta.rma(math.max(close - close[rmiMomLen], 0), rmiLen)
+rmiDown = ta.rma(math.max(close[rmiMomLen] - close, 0), rmiLen)
+rmiVal  = rmiDown == 0 ? 100 : rmiUp == 0 ? 0 : 100 - (100 / (1 + rmiUp / rmiDown))
+rmiBull = rmiVal > rmiMid
+rmiBear = rmiVal < rmiMid
 
 [diPlus, diMinus, adxVal] = ta.dmi(adxLen, adxLen)
 strongTrend = adxVal > adxTh
@@ -277,10 +297,12 @@ fvgOkLong    = not useFvgFilter    or fvgSupportsLong(bullFvgBoxes)
 fvgOkShort   = not useFvgFilter    or fvgSupportsShort(bearFvgBoxes)
 structOkLong = not useStructFilter or structTrend >= 0
 structOkShort = not useStructFilter or structTrend <= 0
+rmiOkLong    = not useRmiTrend or rmiBull
+rmiOkShort   = not useRmiTrend or rmiBear
 
 // ============================== SIGNAL ENGINE =================================
-longCond  = stFlipUp   and emaBullStack and macdLine > macdSignal and rsiVal > 40 and rsiVal < rsiOB and strongTrend and volConfirm and zoneOkLong and fvgOkLong and structOkLong
-shortCond = stFlipDown and emaBearStack and macdLine < macdSignal and rsiVal < 60 and rsiVal > rsiOS and strongTrend and volConfirm and zoneOkShort and fvgOkShort and structOkShort
+longCond  = stFlipUp   and emaBullStack and macdLine > macdSignal and rsiVal > 40 and rsiVal < rsiOB and strongTrend and volConfirm and zoneOkLong and fvgOkLong and structOkLong and rmiOkLong
+shortCond = stFlipDown and emaBearStack and macdLine < macdSignal and rsiVal < 60 and rsiVal > rsiOS and strongTrend and volConfirm and zoneOkShort and fvgOkShort and structOkShort and rmiOkShort
 
 var int   posDir       = 0
 var float entryPrice   = na
@@ -325,6 +347,14 @@ if exitShort
     lastExitPrice := close
     posDir := 0
 
+// ============================== TREND RIBBON (clean professional trend line) =================================
+// Smooth HMA "spine" colored only when SuperTrend direction and RMI agree — a neutral gold
+// tone shows up whenever the two disagree, flagging a weak/transitional trend at a glance.
+ribbonBase   = ta.hma(close, ribbonLen)
+ribbonBull   = trendUp   and (not useRmiTrend or rmiBull)
+ribbonBear   = trendDown and (not useRmiTrend or rmiBear)
+ribbonColor  = ribbonBull ? colBullish : ribbonBear ? colBearish : colGoldSoft
+
 // ============================== PLOTTING (minimal by design) =================================
 plot(showEma ? emaFast : na, "EMA Fast", color=color.new(colTeal, 25), linewidth=1)
 plot(showEma ? emaMed  : na, "EMA Medium", color=color.new(colGold, 25), linewidth=1)
@@ -336,6 +366,9 @@ p2 = plot(showCloud ? emaSlow : na, "cloud2", display=display.none)
 fill(p1, p2, color = showCloud ? fillColor : na, title="اتجاه EMA")
 
 plot(showSuperTrend ? superTrend : na, "SuperTrend", color = trendUp ? color.new(colBullish, 0) : color.new(colBearish, 0), linewidth=2, style=plot.style_linebr)
+
+plot(showRibbon and ribbonGlow ? ribbonBase : na, "Ribbon Glow", color=color.new(ribbonColor, 70), linewidth=ribbonWidth + 4)
+plot(showRibbon ? ribbonBase : na, "Trend Ribbon", color=ribbonColor, linewidth=ribbonWidth)
 
 bgcolor(showBg ? (trendUp ? color.new(colBullish, 96) : trendDown ? color.new(colBearish, 96) : na) : na, title="خلفية الاتجاه")
 
@@ -370,7 +403,7 @@ if showLevels
 tableSize = dashSize == "small" ? size.small : dashSize == "large" ? size.large : size.normal
 
 if showDashboard
-    var table dash = table.new(position.top_right, 2, 14, border_width=1)
+    var table dash = table.new(position.top_right, 2, 15, border_width=1)
 
     table.cell(dash, 0, 0, "EGX Pro Signals", text_color=colGoldSoft, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
     table.cell(dash, 1, 0, syminfo.ticker, text_color=color.white, bgcolor=colPanelBg, text_size=tableSize)
@@ -390,38 +423,43 @@ if showDashboard
     table.cell(dash, 0, 4, "RSI", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
     table.cell(dash, 1, 4, str.tostring(rsiVal, "#.#"), text_color=rsiCol, bgcolor=colPanelBg, text_size=tableSize)
 
-    table.cell(dash, 0, 5, "الحجم", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
-    table.cell(dash, 1, 5, volConfirm ? "مرتفع ✓" : "عادي", text_color=volConfirm ? colGold : colGrey, bgcolor=colPanelBg2, text_size=tableSize)
+    rmiTxt = str.tostring(rmiVal, "#.#") + (rmiBull ? " صاعد" : rmiBear ? " هابط" : "")
+    rmiCol = rmiBull ? colBullish : rmiBear ? colBearish : colGrey
+    table.cell(dash, 0, 5, "RMI", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 5, rmiTxt, text_color=rmiCol, bgcolor=colPanelBg2, text_size=tableSize)
+
+    table.cell(dash, 0, 6, "الحجم", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 6, volConfirm ? "مرتفع ✓" : "عادي", text_color=volConfirm ? colGold : colGrey, bgcolor=colPanelBg, text_size=tableSize)
 
     posTxt = posDir == 1 ? "شراء ▲" : posDir == -1 ? "بيع ▼" : "لا توجد صفقة"
     posCol = posDir == 1 ? colBullish : posDir == -1 ? colBearish : colGrey
-    table.cell(dash, 0, 6, "حالة الصفقة", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
-    table.cell(dash, 1, 6, posTxt, text_color=posCol, bgcolor=colPanelBg, text_size=tableSize)
+    table.cell(dash, 0, 7, "حالة الصفقة", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 7, posTxt, text_color=posCol, bgcolor=colPanelBg2, text_size=tableSize)
 
     zoneTxt = not na(entryZoneTop) and not na(entryZoneBot) ? str.tostring(entryZoneBot, format.mintick) + " - " + str.tostring(entryZoneTop, format.mintick) : "—"
-    table.cell(dash, 0, 7, "منطقة الدخول المقترحة", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
-    table.cell(dash, 1, 7, zoneTxt, text_color=colGoldSoft, bgcolor=colPanelBg2, text_size=tableSize)
+    table.cell(dash, 0, 8, "منطقة الدخول المقترحة", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 8, zoneTxt, text_color=colGoldSoft, bgcolor=colPanelBg, text_size=tableSize)
 
-    table.cell(dash, 0, 8, "وقف الخسارة", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
-    table.cell(dash, 1, 8, posDir != 0 ? str.tostring(stopLevel, format.mintick) : "—", text_color=colBearish, bgcolor=colPanelBg, text_size=tableSize)
+    table.cell(dash, 0, 9, "وقف الخسارة", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 9, posDir != 0 ? str.tostring(stopLevel, format.mintick) : "—", text_color=colBearish, bgcolor=colPanelBg2, text_size=tableSize)
 
-    table.cell(dash, 0, 9, "الهدف", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
-    table.cell(dash, 1, 9, posDir != 0 ? str.tostring(targetLevel, format.mintick) : "—", text_color=colBullish, bgcolor=colPanelBg2, text_size=tableSize)
+    table.cell(dash, 0, 10, "الهدف", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 10, posDir != 0 ? str.tostring(targetLevel, format.mintick) : "—", text_color=colBullish, bgcolor=colPanelBg, text_size=tableSize)
 
     exitTxt = exitReason == "" ? "—" : exitReason + " @ " + str.tostring(lastExitPrice, format.mintick)
-    table.cell(dash, 0, 10, "آخر خروج", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
-    table.cell(dash, 1, 10, exitTxt, text_color=colGrey, bgcolor=colPanelBg, text_size=tableSize)
+    table.cell(dash, 0, 11, "آخر خروج", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 11, exitTxt, text_color=colGrey, bgcolor=colPanelBg2, text_size=tableSize)
 
     structTxt = structTrend > 0 ? "صاعد ▲" : structTrend < 0 ? "هابط ▼" : "غير محدد"
     structCol = structTrend > 0 ? colBullish : structTrend < 0 ? colBearish : colGrey
-    table.cell(dash, 0, 11, "هيكل السوق", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
-    table.cell(dash, 1, 11, structTxt, text_color=structCol, bgcolor=colPanelBg2, text_size=tableSize)
+    table.cell(dash, 0, 12, "هيكل السوق", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 12, structTxt, text_color=structCol, bgcolor=colPanelBg, text_size=tableSize)
 
-    table.cell(dash, 0, 12, "مناطق طلب/عرض", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
-    table.cell(dash, 1, 12, str.tostring(array.size(demandBoxes)) + " / " + str.tostring(array.size(supplyBoxes)), text_color=colGoldSoft, bgcolor=colPanelBg, text_size=tableSize)
+    table.cell(dash, 0, 13, "مناطق طلب/عرض", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 13, str.tostring(array.size(demandBoxes)) + " / " + str.tostring(array.size(supplyBoxes)), text_color=colGoldSoft, bgcolor=colPanelBg2, text_size=tableSize)
 
-    table.cell(dash, 0, 13, "فجوات FVG نشطة", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
-    table.cell(dash, 1, 13, str.tostring(array.size(bullFvgBoxes)) + " / " + str.tostring(array.size(bearFvgBoxes)), text_color=colGoldSoft, bgcolor=colPanelBg2, text_size=tableSize)
+    table.cell(dash, 0, 14, "فجوات FVG نشطة", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 14, str.tostring(array.size(bullFvgBoxes)) + " / " + str.tostring(array.size(bearFvgBoxes)), text_color=colGoldSoft, bgcolor=colPanelBg, text_size=tableSize)
 
 // ============================== ALERTS =================================
 alertcondition(longCond, title="EGX Buy Signal", message="EGX Pro Signals: BUY {{ticker}} @ {{close}}")
