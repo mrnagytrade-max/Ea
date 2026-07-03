@@ -36,28 +36,34 @@ atrLen    = input.int(14, "فترة ATR", group=grpRisk)
 rrRatio   = input.float(2.0, "نسبة العائد للمخاطرة R:R", step=0.1, minval=0.5, group=grpRisk)
 
 grpStyle = "🎨 التصميم — Style"
-showDashboard = input.bool(true, "إظهار لوحة المعلومات", group=grpStyle)
-showCloud     = input.bool(true, "إظهار سحابة الاتجاه EMA", group=grpStyle)
-showBg        = input.bool(true, "تظليل خلفية الاتجاه", group=grpStyle)
-showLevels    = input.bool(true, "إظهار خطوط الدخول / الوقف / الهدف", group=grpStyle)
-dashSize      = input.string("normal", "حجم لوحة المعلومات", options=["small", "normal", "large"], group=grpStyle)
+showDashboard    = input.bool(true, "إظهار لوحة المعلومات", group=grpStyle)
+showSuperTrend   = input.bool(true, "إظهار خط الاتجاه SuperTrend", group=grpStyle)
+showEma          = input.bool(false, "إظهار متوسطات EMA على الشارت", group=grpStyle)
+showCloud        = input.bool(false, "إظهار سحابة الاتجاه EMA", group=grpStyle)
+showBg           = input.bool(false, "تظليل خلفية الاتجاه", group=grpStyle)
+showLevels       = input.bool(false, "إظهار خطوط الدخول / الوقف / الهدف", group=grpStyle)
+showExitMarkers  = input.bool(false, "إظهار علامات الخروج على الشارت", group=grpStyle, tooltip="بيانات الخروج تظهر دائمًا في لوحة المعلومات بغض النظر عن هذا الخيار")
+dashSize         = input.string("normal", "حجم لوحة المعلومات", options=["small", "normal", "large"], group=grpStyle)
 
 grpZones = "🟩 مناطق العرض والطلب — Supply & Demand"
-enableZones    = input.bool(true, "إظهار مناطق العرض والطلب", group=grpZones)
-zoneSwingLen   = input.int(5, "طول السوينج (Pivot)", minval=2, group=grpZones)
-zoneDispMult   = input.float(1.5, "أدنى قوة اندفاع (× ATR)", step=0.1, minval=0.5, group=grpZones, tooltip="كلما زادت القيمة كلما قلّت المناطق وزادت قوتها")
-zoneMaxCount   = input.int(6, "أقصى عدد مناطق نشطة لكل نوع", minval=1, maxval=20, group=grpZones)
-zoneExtendBars = input.int(60, "امتداد المنطقة (عدد شموع)", minval=5, group=grpZones)
+enableZones      = input.bool(true, "تفعيل تحليل مناطق العرض والطلب", group=grpZones, tooltip="التحليل يغذي لوحة المعلومات والفلاتر حتى لو الرسم على الشارت معطّل")
+showZonesOnChart = input.bool(false, "رسم مناطق العرض والطلب على الشارت", group=grpZones)
+zoneSwingLen     = input.int(5, "طول السوينج (Pivot)", minval=2, group=grpZones)
+zoneDispMult     = input.float(1.5, "أدنى قوة اندفاع (× ATR)", step=0.1, minval=0.5, group=grpZones, tooltip="كلما زادت القيمة كلما قلّت المناطق وزادت قوتها")
+zoneMaxCount     = input.int(6, "أقصى عدد مناطق نشطة لكل نوع", minval=1, maxval=20, group=grpZones)
+zoneExtendBars   = input.int(60, "امتداد المنطقة (عدد شموع)", minval=5, group=grpZones)
 
 grpFvg = "🌀 الفجوات السعرية — Fair Value Gaps"
-enableFvg     = input.bool(true, "إظهار الفجوات السعرية FVG", group=grpFvg)
+enableFvg     = input.bool(true, "تفعيل تحليل الفجوات السعرية FVG", group=grpFvg)
+showFvgOnChart = input.bool(false, "رسم الفجوات السعرية على الشارت", group=grpFvg)
 fvgMinAtr     = input.float(0.25, "أدنى حجم للفجوة (× ATR)", step=0.05, minval=0, group=grpFvg, tooltip="يفلتر الفجوات الصغيرة غير المهمة")
 fvgMaxCount   = input.int(10, "أقصى عدد فجوات نشطة لكل نوع", minval=1, maxval=30, group=grpFvg)
 fvgExtendBars = input.int(40, "امتداد الفجوة (عدد شموع)", minval=5, group=grpFvg)
 
 grpStruct = "🧭 هيكل السوق — Price Action (BOS/CHoCH)"
-enableStructure = input.bool(true, "إظهار كسر الهيكل BOS / CHoCH", group=grpStruct)
-structSwingLen  = input.int(5, "طول السوينج للهيكل", minval=2, group=grpStruct)
+enableStructure      = input.bool(true, "تفعيل تحليل هيكل السوق", group=grpStruct)
+showStructureOnChart = input.bool(false, "رسم علامات BOS / CHoCH على الشارت", group=grpStruct)
+structSwingLen       = input.int(5, "طول السوينج للهيكل", minval=2, group=grpStruct)
 
 grpFilter = "🔎 فلاتر تأكيد إضافية — Confluence Filters"
 useZoneFilter    = input.bool(false, "اشتراط الدخول من منطقة عرض/طلب", group=grpFilter, tooltip="شراء فقط قرب منطقة طلب، وبيع فقط قرب منطقة عرض")
@@ -114,7 +120,10 @@ if enableZones and not na(zonePivLow)
     zDisp = (close - zonePivLow) / atrVal
     if zDisp > zoneDispMult
         zTag = zDisp > zoneDispMult * 2 ? " 💎" : zDisp > zoneDispMult * 1.5 ? " 🔥" : ""
-        dBox = box.new(zPivIdx, zTop, bar_index + zoneExtendBars, zBot, border_color=color.new(colBullish, 20), bgcolor=color.new(colBullish, 85), border_width=1, text="Demand" + zTag, text_size=size.tiny, text_color=color.new(colBullish, 0), text_halign=text.align_left, text_valign=text.align_bottom)
+        zBorderCol = showZonesOnChart ? color.new(colBullish, 20) : color.new(colBullish, 100)
+        zBgCol     = showZonesOnChart ? color.new(colBullish, 85) : color.new(colBullish, 100)
+        zTextCol   = showZonesOnChart ? color.new(colBullish, 0)  : color.new(colBullish, 100)
+        dBox = box.new(zPivIdx, zTop, bar_index + zoneExtendBars, zBot, border_color=zBorderCol, bgcolor=zBgCol, border_width=1, text=showZonesOnChart ? "Demand" + zTag : "", text_size=size.tiny, text_color=zTextCol, text_halign=text.align_left, text_valign=text.align_bottom)
         array.unshift(demandBoxes, dBox)
         if array.size(demandBoxes) > zoneMaxCount
             box.delete(array.pop(demandBoxes))
@@ -126,7 +135,10 @@ if enableZones and not na(zonePivHigh)
     zDisp = (zonePivHigh - close) / atrVal
     if zDisp > zoneDispMult
         zTag = zDisp > zoneDispMult * 2 ? " 💎" : zDisp > zoneDispMult * 1.5 ? " 🔥" : ""
-        sBox = box.new(zPivIdx, zTop, bar_index + zoneExtendBars, zBot, border_color=color.new(colBearish, 20), bgcolor=color.new(colBearish, 85), border_width=1, text="Supply" + zTag, text_size=size.tiny, text_color=color.new(colBearish, 0), text_halign=text.align_left, text_valign=text.align_top)
+        zBorderCol = showZonesOnChart ? color.new(colBearish, 20) : color.new(colBearish, 100)
+        zBgCol     = showZonesOnChart ? color.new(colBearish, 85) : color.new(colBearish, 100)
+        zTextCol   = showZonesOnChart ? color.new(colBearish, 0)  : color.new(colBearish, 100)
+        sBox = box.new(zPivIdx, zTop, bar_index + zoneExtendBars, zBot, border_color=zBorderCol, bgcolor=zBgCol, border_width=1, text=showZonesOnChart ? "Supply" + zTag : "", text_size=size.tiny, text_color=zTextCol, text_halign=text.align_left, text_valign=text.align_top)
         array.unshift(supplyBoxes, sBox)
         if array.size(supplyBoxes) > zoneMaxCount
             box.delete(array.pop(supplyBoxes))
@@ -157,7 +169,10 @@ bearFvg = high < low[2] and (low[2] - high) > atrVal * fvgMinAtr
 if enableFvg and bullFvg
     fTop = low
     fBot = high[2]
-    fBox = box.new(bar_index - 2, fTop, bar_index + fvgExtendBars, fBot, border_color=color.new(colTeal, 30), bgcolor=color.new(colTeal, 85), border_width=1, border_style=line.style_dashed, text="FVG", text_size=size.tiny, text_color=color.new(colTeal, 0))
+    fBorderCol = showFvgOnChart ? color.new(colTeal, 30) : color.new(colTeal, 100)
+    fBgCol     = showFvgOnChart ? color.new(colTeal, 85) : color.new(colTeal, 100)
+    fTextCol   = showFvgOnChart ? color.new(colTeal, 0)  : color.new(colTeal, 100)
+    fBox = box.new(bar_index - 2, fTop, bar_index + fvgExtendBars, fBot, border_color=fBorderCol, bgcolor=fBgCol, border_width=1, border_style=line.style_dashed, text=showFvgOnChart ? "FVG" : "", text_size=size.tiny, text_color=fTextCol)
     array.unshift(bullFvgBoxes, fBox)
     if array.size(bullFvgBoxes) > fvgMaxCount
         box.delete(array.pop(bullFvgBoxes))
@@ -165,7 +180,10 @@ if enableFvg and bullFvg
 if enableFvg and bearFvg
     fTop = low[2]
     fBot = high
-    fBox = box.new(bar_index - 2, fTop, bar_index + fvgExtendBars, fBot, border_color=color.new(colBearish, 30), bgcolor=color.new(colBearish, 85), border_width=1, border_style=line.style_dashed, text="FVG", text_size=size.tiny, text_color=color.new(colBearish, 0))
+    fBorderCol = showFvgOnChart ? color.new(colBearish, 30) : color.new(colBearish, 100)
+    fBgCol     = showFvgOnChart ? color.new(colBearish, 85) : color.new(colBearish, 100)
+    fTextCol   = showFvgOnChart ? color.new(colBearish, 0)  : color.new(colBearish, 100)
+    fBox = box.new(bar_index - 2, fTop, bar_index + fvgExtendBars, fBot, border_color=fBorderCol, bgcolor=fBgCol, border_width=1, border_style=line.style_dashed, text=showFvgOnChart ? "FVG" : "", text_size=size.tiny, text_color=fTextCol)
     array.unshift(bearFvgBoxes, fBox)
     if array.size(bearFvgBoxes) > fvgMaxCount
         box.delete(array.pop(bearFvgBoxes))
@@ -203,11 +221,13 @@ bosUp   = enableStructure and not na(lastSwingHigh) and ta.crossover(close, last
 bosDown = enableStructure and not na(lastSwingLow)  and ta.crossunder(close, lastSwingLow)
 
 if bosUp
-    label.new(bar_index, low - atrVal * 0.9, structTrend <= 0 ? "CHoCH ▲" : "BOS ▲", style=label.style_label_up, color=color.new(colBullish, 70), textcolor=colBullish, size=size.tiny)
+    if showStructureOnChart
+        label.new(bar_index, low - atrVal * 0.9, structTrend <= 0 ? "CHoCH ▲" : "BOS ▲", style=label.style_label_up, color=color.new(colBullish, 70), textcolor=colBullish, size=size.tiny)
     structTrend := 1
 
 if bosDown
-    label.new(bar_index, high + atrVal * 0.9, structTrend >= 0 ? "CHoCH ▼" : "BOS ▼", style=label.style_label_down, color=color.new(colBearish, 70), textcolor=colBearish, size=size.tiny)
+    if showStructureOnChart
+        label.new(bar_index, high + atrVal * 0.9, structTrend >= 0 ? "CHoCH ▼" : "BOS ▼", style=label.style_label_down, color=color.new(colBearish, 70), textcolor=colBearish, size=size.tiny)
     structTrend := -1
 
 // ============================== CONFLUENCE FILTER HELPERS =================================
@@ -240,6 +260,17 @@ fvgSupportsShort(arr) =>
                 found := true
     found
 
+zoneRange(arr) =>
+    t = float(na)
+    b = float(na)
+    if array.size(arr) > 0
+        t := box.get_top(array.get(arr, 0))
+        b := box.get_bottom(array.get(arr, 0))
+    [t, b]
+
+[nearestDemTop, nearestDemBot] = zoneRange(demandBoxes)
+[nearestSupTop, nearestSupBot] = zoneRange(supplyBoxes)
+
 zoneOkLong   = not useZoneFilter   or priceNearZone(demandBoxes, atrVal * zoneProximityAtr)
 zoneOkShort  = not useZoneFilter   or priceNearZone(supplyBoxes, atrVal * zoneProximityAtr)
 fvgOkLong    = not useFvgFilter    or fvgSupportsLong(bullFvgBoxes)
@@ -251,11 +282,14 @@ structOkShort = not useStructFilter or structTrend <= 0
 longCond  = stFlipUp   and emaBullStack and macdLine > macdSignal and rsiVal > 40 and rsiVal < rsiOB and strongTrend and volConfirm and zoneOkLong and fvgOkLong and structOkLong
 shortCond = stFlipDown and emaBearStack and macdLine < macdSignal and rsiVal < 60 and rsiVal > rsiOS and strongTrend and volConfirm and zoneOkShort and fvgOkShort and structOkShort
 
-var int   posDir      = 0
-var float entryPrice  = na
-var float stopLevel   = na
-var float targetLevel = na
-var string exitReason = ""
+var int   posDir       = 0
+var float entryPrice   = na
+var float stopLevel    = na
+var float targetLevel  = na
+var string exitReason  = ""
+var float entryZoneTop = na
+var float entryZoneBot = na
+var float lastExitPrice = na
 
 hitStopLong    = posDir == 1  and low  <= stopLevel
 hitTargetLong  = posDir == 1  and high >= targetLevel
@@ -270,43 +304,46 @@ if longCond and posDir != 1
     entryPrice := close
     stopLevel := superTrend
     targetLevel := close + (close - superTrend) * rrRatio
+    entryZoneTop := not na(nearestDemTop) ? nearestDemTop : close + atrVal * 0.3
+    entryZoneBot := not na(nearestDemBot) ? nearestDemBot : close - atrVal * 0.3
 
 if shortCond and posDir != -1
     posDir := -1
     entryPrice := close
     stopLevel := superTrend
     targetLevel := close - (superTrend - close) * rrRatio
+    entryZoneTop := not na(nearestSupTop) ? nearestSupTop : close + atrVal * 0.3
+    entryZoneBot := not na(nearestSupBot) ? nearestSupBot : close - atrVal * 0.3
 
 if exitLong
     exitReason := hitTargetLong ? "TP" : hitStopLong ? "SL" : "FLIP"
+    lastExitPrice := close
     posDir := 0
 
 if exitShort
     exitReason := hitTargetShort ? "TP" : hitStopShort ? "SL" : "FLIP"
+    lastExitPrice := close
     posDir := 0
 
-// ============================== PLOTTING =================================
-plot(emaFast, "EMA Fast", color=color.new(colTeal, 25), linewidth=1)
-plot(emaMed,  "EMA Medium", color=color.new(colGold, 25), linewidth=1)
-plot(emaSlow, "EMA Slow", color=color.new(colGrey, 15), linewidth=2)
+// ============================== PLOTTING (minimal by design) =================================
+plot(showEma ? emaFast : na, "EMA Fast", color=color.new(colTeal, 25), linewidth=1)
+plot(showEma ? emaMed  : na, "EMA Medium", color=color.new(colGold, 25), linewidth=1)
+plot(showEma ? emaSlow : na, "EMA Slow", color=color.new(colGrey, 15), linewidth=2)
 
 fillColor = trendUp ? color.new(colBullish, 88) : trendDown ? color.new(colBearish, 88) : color.new(colGrey, 95)
 p1 = plot(showCloud ? emaFast : na, "cloud1", display=display.none)
 p2 = plot(showCloud ? emaSlow : na, "cloud2", display=display.none)
 fill(p1, p2, color = showCloud ? fillColor : na, title="اتجاه EMA")
 
-plot(superTrend, "SuperTrend", color = trendUp ? color.new(colBullish, 0) : color.new(colBearish, 0), linewidth=2, style=plot.style_linebr)
+plot(showSuperTrend ? superTrend : na, "SuperTrend", color = trendUp ? color.new(colBullish, 0) : color.new(colBearish, 0), linewidth=2, style=plot.style_linebr)
 
 bgcolor(showBg ? (trendUp ? color.new(colBullish, 96) : trendDown ? color.new(colBearish, 96) : na) : na, title="خلفية الاتجاه")
 
-// Entry labels
-if longCond
-    label.new(bar_index, low - atrVal * 0.6, "BUY\n" + str.tostring(close, format.mintick), style=label.style_label_up, color=color.new(colBullish, 0), textcolor=color.white, size=size.small)
+// Entry markers — kept minimal on purpose, full detail lives in the dashboard
+plotshape(longCond, title="BUY", style=shape.triangleup, location=location.belowbar, color=colBullish, size=size.small, text="BUY", textcolor=color.white)
+plotshape(shortCond, title="SELL", style=shape.triangledown, location=location.abovebar, color=colBearish, size=size.small, text="SELL", textcolor=color.white)
 
-if shortCond
-    label.new(bar_index, high + atrVal * 0.6, "SELL\n" + str.tostring(close, format.mintick), style=label.style_label_down, color=color.new(colBearish, 0), textcolor=color.white, size=size.small)
-
-if exitLong or exitShort
+if showExitMarkers and (exitLong or exitShort)
     exitColor = exitReason == "TP" ? colGold : exitReason == "SL" ? colBearish : colGrey
     exitY = exitLong ? high + atrVal * 0.4 : low - atrVal * 0.4
     label.new(bar_index, exitY, exitReason, style=label.style_label_left, color=color.new(exitColor, 10), textcolor=color.white, size=size.tiny)
@@ -333,46 +370,58 @@ if showLevels
 tableSize = dashSize == "small" ? size.small : dashSize == "large" ? size.large : size.normal
 
 if showDashboard
-    var table dash = table.new(position.top_right, 2, 11, border_width=1)
+    var table dash = table.new(position.top_right, 2, 14, border_width=1)
+
     table.cell(dash, 0, 0, "EGX Pro Signals", text_color=colGoldSoft, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
     table.cell(dash, 1, 0, syminfo.ticker, text_color=color.white, bgcolor=colPanelBg, text_size=tableSize)
 
+    table.merge_cells(dash, 0, 1, 1, 1)
+    table.cell(dash, 0, 1, "Created By Arbah Markets", text_color=colGold, bgcolor=colPanelBg2, text_size=size.tiny, text_halign=text.align_center)
+
     trendTxt = trendUp ? "صاعد ▲" : trendDown ? "هابط ▼" : "محايد ●"
     trendCol = trendUp ? colBullish : trendDown ? colBearish : colGrey
-    table.cell(dash, 0, 1, "الاتجاه", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
-    table.cell(dash, 1, 1, trendTxt, text_color=trendCol, bgcolor=colPanelBg2, text_size=tableSize)
+    table.cell(dash, 0, 2, "الاتجاه", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 2, trendTxt, text_color=trendCol, bgcolor=colPanelBg, text_size=tableSize)
 
-    table.cell(dash, 0, 2, "قوة الاتجاه ADX", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
-    table.cell(dash, 1, 2, str.tostring(adxVal, "#.#") + (strongTrend ? " قوي" : " ضعيف"), text_color=strongTrend ? colGold : colGrey, bgcolor=colPanelBg, text_size=tableSize)
+    table.cell(dash, 0, 3, "قوة الاتجاه ADX", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 3, str.tostring(adxVal, "#.#") + (strongTrend ? " قوي" : " ضعيف"), text_color=strongTrend ? colGold : colGrey, bgcolor=colPanelBg2, text_size=tableSize)
 
     rsiCol = rsiVal > rsiOB ? colBearish : rsiVal < rsiOS ? colBullish : color.white
-    table.cell(dash, 0, 3, "RSI", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
-    table.cell(dash, 1, 3, str.tostring(rsiVal, "#.#"), text_color=rsiCol, bgcolor=colPanelBg2, text_size=tableSize)
+    table.cell(dash, 0, 4, "RSI", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 4, str.tostring(rsiVal, "#.#"), text_color=rsiCol, bgcolor=colPanelBg, text_size=tableSize)
 
-    table.cell(dash, 0, 4, "الحجم", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
-    table.cell(dash, 1, 4, volConfirm ? "مرتفع ✓" : "عادي", text_color=volConfirm ? colGold : colGrey, bgcolor=colPanelBg, text_size=tableSize)
+    table.cell(dash, 0, 5, "الحجم", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 5, volConfirm ? "مرتفع ✓" : "عادي", text_color=volConfirm ? colGold : colGrey, bgcolor=colPanelBg2, text_size=tableSize)
 
     posTxt = posDir == 1 ? "شراء ▲" : posDir == -1 ? "بيع ▼" : "لا توجد صفقة"
     posCol = posDir == 1 ? colBullish : posDir == -1 ? colBearish : colGrey
-    table.cell(dash, 0, 5, "حالة الصفقة", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
-    table.cell(dash, 1, 5, posTxt, text_color=posCol, bgcolor=colPanelBg2, text_size=tableSize)
+    table.cell(dash, 0, 6, "حالة الصفقة", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 6, posTxt, text_color=posCol, bgcolor=colPanelBg, text_size=tableSize)
 
-    table.cell(dash, 0, 6, "وقف الخسارة", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
-    table.cell(dash, 1, 6, posDir != 0 ? str.tostring(stopLevel, format.mintick) : "—", text_color=colBearish, bgcolor=colPanelBg, text_size=tableSize)
+    zoneTxt = not na(entryZoneTop) and not na(entryZoneBot) ? str.tostring(entryZoneBot, format.mintick) + " - " + str.tostring(entryZoneTop, format.mintick) : "—"
+    table.cell(dash, 0, 7, "منطقة الدخول المقترحة", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 7, zoneTxt, text_color=colGoldSoft, bgcolor=colPanelBg2, text_size=tableSize)
 
-    table.cell(dash, 0, 7, "الهدف", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
-    table.cell(dash, 1, 7, posDir != 0 ? str.tostring(targetLevel, format.mintick) : "—", text_color=colBullish, bgcolor=colPanelBg2, text_size=tableSize)
+    table.cell(dash, 0, 8, "وقف الخسارة", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 8, posDir != 0 ? str.tostring(stopLevel, format.mintick) : "—", text_color=colBearish, bgcolor=colPanelBg, text_size=tableSize)
+
+    table.cell(dash, 0, 9, "الهدف", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 9, posDir != 0 ? str.tostring(targetLevel, format.mintick) : "—", text_color=colBullish, bgcolor=colPanelBg2, text_size=tableSize)
+
+    exitTxt = exitReason == "" ? "—" : exitReason + " @ " + str.tostring(lastExitPrice, format.mintick)
+    table.cell(dash, 0, 10, "آخر خروج", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 10, exitTxt, text_color=colGrey, bgcolor=colPanelBg, text_size=tableSize)
 
     structTxt = structTrend > 0 ? "صاعد ▲" : structTrend < 0 ? "هابط ▼" : "غير محدد"
     structCol = structTrend > 0 ? colBullish : structTrend < 0 ? colBearish : colGrey
-    table.cell(dash, 0, 8, "هيكل السوق", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
-    table.cell(dash, 1, 8, structTxt, text_color=structCol, bgcolor=colPanelBg, text_size=tableSize)
+    table.cell(dash, 0, 11, "هيكل السوق", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 11, structTxt, text_color=structCol, bgcolor=colPanelBg2, text_size=tableSize)
 
-    table.cell(dash, 0, 9, "مناطق طلب/عرض", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
-    table.cell(dash, 1, 9, str.tostring(array.size(demandBoxes)) + " / " + str.tostring(array.size(supplyBoxes)), text_color=colGoldSoft, bgcolor=colPanelBg2, text_size=tableSize)
+    table.cell(dash, 0, 12, "مناطق طلب/عرض", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 12, str.tostring(array.size(demandBoxes)) + " / " + str.tostring(array.size(supplyBoxes)), text_color=colGoldSoft, bgcolor=colPanelBg, text_size=tableSize)
 
-    table.cell(dash, 0, 10, "فجوات FVG نشطة", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
-    table.cell(dash, 1, 10, str.tostring(array.size(bullFvgBoxes)) + " / " + str.tostring(array.size(bearFvgBoxes)), text_color=colGoldSoft, bgcolor=colPanelBg, text_size=tableSize)
+    table.cell(dash, 0, 13, "فجوات FVG نشطة", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 13, str.tostring(array.size(bullFvgBoxes)) + " / " + str.tostring(array.size(bearFvgBoxes)), text_color=colGoldSoft, bgcolor=colPanelBg2, text_size=tableSize)
 
 // ============================== ALERTS =================================
 alertcondition(longCond, title="EGX Buy Signal", message="EGX Pro Signals: BUY {{ticker}} @ {{close}}")
