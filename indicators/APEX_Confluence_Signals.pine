@@ -1,0 +1,506 @@
+//@version=6
+// ============================================================================
+//  APEX Confluence Signals  |  مؤشر التوافق الذكي APEX
+//  ICT / Smart-Money style engine for Forex, Metals & Indices:
+//  Trend Ribbon (SuperTrend + HMA + RMI) + Market Structure (BOS/CHoCH) +
+//  Liquidity Sweeps (EQH/EQL) + OTE retracement zones + Session boxes
+//  (Asia/London/New York) + Regime detection (Kaufman Efficiency Ratio) +
+//  Higher-timeframe bias + approximate CVD + Major Support/Resistance +
+//  a transparent, weighted Confluence Score (0-100%) — a rule-based,
+//  auditable stand-in for the black-box "AI confidence" badges seen on
+//  commercial dashboards. No proprietary data or code was copied; every
+//  concept here (OTE, BOS/CHoCH, liquidity sweeps, session ranges,
+//  efficiency ratio) is public technical-analysis methodology.
+// ============================================================================
+indicator("APEX Confluence Signals | مؤشر التوافق الذكي APEX", shorttitle="APEX Pro", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500)
+
+// ============================== INPUTS =====================================
+grpTrend = "📈 الاتجاه — Trend Ribbon"
+ribbonLen    = input.int(21, "طول تجانس الشريط (HMA)", minval=2, group=grpTrend)
+stFactor     = input.float(3.0, "SuperTrend Factor", step=0.1, group=grpTrend)
+stAtrLen     = input.int(10, "SuperTrend ATR Length", group=grpTrend)
+ribbonGlow   = input.bool(true, "تأثير التوهج (Glow)", group=grpTrend)
+ribbonWidth  = input.int(2, "سُمك الخط", minval=1, maxval=5, group=grpTrend)
+
+grpRmi = "🎯 RMI — Relative Momentum Index"
+useRmiTrend = input.bool(true, "استخدام RMI لتأكيد الاتجاه", group=grpRmi)
+rmiLen      = input.int(14, "فترة تجانس RMI", minval=2, group=grpRmi)
+rmiMomLen   = input.int(5, "فترة الزخم", minval=1, group=grpRmi)
+rmiMid      = input.int(50, "خط المنتصف", minval=1, maxval=99, group=grpRmi)
+
+grpMom = "⚡ الزخم — RSI"
+rsiLen = input.int(14, "فترة RSI", group=grpMom)
+rsiOB  = input.int(70, "تشبع شرائي (Overbought)", group=grpMom)
+rsiOS  = input.int(30, "تشبع بيعي (Oversold)", group=grpMom)
+
+grpRegime = "🌊 نظام السوق — Regime (Efficiency Ratio)"
+erLen       = input.int(10, "فترة معامل الكفاءة (ER)", minval=2, group=grpRegime, tooltip="Kaufman Efficiency Ratio: يقيس نقاء الاتجاه مقابل الحركة العشوائية — 0 يعني سوق عرضي تمامًا و1 يعني اتجاه نقي")
+erThreshold = input.float(0.30, "حد الاتجاه (Trending Threshold)", step=0.05, minval=0.05, maxval=0.95, group=grpRegime)
+
+grpMtf = "🧭 الإطار الزمني الأعلى — MTF Bias"
+useMtf = input.bool(true, "تفعيل تحيّز الإطار الأعلى", group=grpMtf)
+mtfTf  = input.timeframe("240", "الإطار الزمني الأعلى", group=grpMtf)
+mtfLen = input.int(50, "فترة EMA للإطار الأعلى", minval=2, group=grpMtf)
+
+grpSession = "🌍 الجلسات — Sessions (UTC)"
+showSessions = input.bool(true, "رسم صناديق الجلسات على الشارت", group=grpSession)
+asiaSess     = input.session("0000-0900", "جلسة آسيا", group=grpSession)
+londonSess   = input.session("0700-1600", "جلسة لندن", group=grpSession)
+nySess       = input.session("1200-2100", "جلسة نيويورك", group=grpSession)
+sessTz       = input.string("UTC", "المنطقة الزمنية", group=grpSession)
+
+grpStruct = "🧭 هيكل السوق — Structure (BOS/CHoCH)"
+structSwingLen = input.int(5, "طول السوينج", minval=2, group=grpStruct)
+showStructure  = input.bool(true, "رسم علامات BOS / CHoCH", group=grpStruct)
+
+grpSweep = "💧 السيولة — Liquidity Sweeps"
+enableSweeps  = input.bool(true, "تفعيل اكتشاف سحب السيولة (EQH/EQL Sweep)", group=grpSweep, tooltip="سحب سيولة = اختراق قمة/قاع رئيسي بفتيل ثم إغلاق عكسي داخل النطاق — إشارة على اصطياد وقف الخسارة")
+showSweeps    = input.bool(true, "رسم علامات السيولة على الشارت", group=grpSweep)
+sweepLookback = input.int(20, "أقصى عدد شموع لاعتبار السحب حديثًا", minval=1, group=grpSweep)
+
+grpOte = "🎯 منطقة الدخول المثلى — OTE Zone"
+showOte       = input.bool(true, "رسم منطقة OTE على الشارت", group=grpOte)
+oteFibNear    = input.float(0.618, "بداية المنطقة (Fib)", step=0.01, group=grpOte)
+oteFibFar     = input.float(0.79, "نهاية المنطقة (Fib)", step=0.01, group=grpOte)
+oteExtendBars = input.int(50, "امتداد المنطقة (عدد شموع)", minval=5, group=grpOte)
+
+grpSR = "📏 الدعم والمقاومة الرئيسية — Major S/R"
+showSR         = input.bool(true, "إظهار مستويات الدعم والمقاومة الرئيسية", group=grpSR)
+srSwingLen     = input.int(15, "طول السوينج", minval=5, group=grpSR)
+srMergeAtr     = input.float(1.0, "مسافة دمج المستويات (× ATR)", step=0.1, minval=0.1, group=grpSR)
+srMaxLevels    = input.int(6, "أقصى عدد مستويات", minval=1, maxval=15, group=grpSR)
+srMinTouches   = input.int(2, "أقل عدد لمسات للعرض", minval=1, group=grpSR)
+srLineWidth    = input.int(1, "سُمك الخط الأساسي", minval=1, maxval=4, group=grpSR)
+showMajorLabel = input.bool(true, "وضع تسمية Major R / Major S على أقوى مستوى", group=grpSR)
+
+grpVol = "📊 الحجم و CVD"
+volLen        = input.int(20, "متوسط الحجم", group=grpVol)
+volMult       = input.float(1.2, "معامل تأكيد الحجم", step=0.1, minval=0.5, group=grpVol)
+enableCvd     = input.bool(true, "تفعيل CVD التقريبي (Approx. Cumulative Volume Delta)", group=grpVol, tooltip="تقدير الدلتا من موقع إغلاق كل شمعة داخل مداها (High/Low) — تقريب إحصائي وليس بيانات تيك حقيقية (TradingView لا يوفر Order Flow حقيقي في Pine)")
+cvdResetDaily = input.bool(true, "إعادة تصفير CVD يوميًا", group=grpVol)
+
+grpRisk = "🛡️ المخاطر ومقاس اللوت — Risk & Lot Size"
+atrLen         = input.int(14, "فترة ATR", group=grpRisk)
+rrRatio        = input.float(2.3, "نسبة العائد للمخاطرة R:R", step=0.1, minval=0.5, group=grpRisk)
+accountBalance = input.float(10000, "رصيد الحساب", minval=0, group=grpRisk)
+riskPercent    = input.float(1.0, "نسبة المخاطرة لكل صفقة %", step=0.1, minval=0.01, group=grpRisk)
+contractSize   = input.float(100000, "حجم العقد لكل لوت (وحدات)", minval=1, group=grpRisk, tooltip="100000 للوت القياسي في الفوركس — عدّلها حسب الأداة (مثلاً 100 أونصة للذهب حسب الوسيط). الحساب تقريبي ويفترض تطابق عملة الحساب مع عملة التسعير")
+
+grpScore = "⚖️ أوزان نقاط التوافق — Confluence Weights (0 لتعطيل العامل)"
+wTrend        = input.int(20, "الاتجاه (Ribbon)", minval=0, group=grpScore)
+wStruct       = input.int(15, "هيكل السوق (BOS/CHoCH)", minval=0, group=grpScore)
+wMtf          = input.int(15, "الإطار الأعلى (MTF)", minval=0, group=grpScore)
+wSweep        = input.int(15, "سحب السيولة (Sweep)", minval=0, group=grpScore)
+wOte          = input.int(10, "داخل منطقة OTE", minval=0, group=grpScore)
+wRsi          = input.int(10, "RSI غير متطرف", minval=0, group=grpScore)
+wVolume       = input.int(10, "ارتفاع الحجم", minval=0, group=grpScore)
+wRegime       = input.int(5,  "نظام سوق متجه (Trending)", minval=0, group=grpScore)
+minScoreEntry = input.int(50, "أقل نقاط توافق لإصدار إشارة", minval=0, maxval=100, group=grpScore)
+goldenScore   = input.int(85, "نقاط التوافق لإشارة Golden ⭐", minval=0, maxval=100, group=grpScore)
+
+grpStyle = "🎨 التصميم — Style"
+showDashboard   = input.bool(true, "إظهار لوحة المعلومات", group=grpStyle)
+dashSize        = input.string("normal", "حجم اللوحة", options=["small", "normal", "large"], group=grpStyle)
+showEntryLabels = input.bool(true, "رسم صناديق الدخول (Entry/Score)", group=grpStyle)
+showLevels      = input.bool(false, "إظهار خطوط الدخول/الوقف/الهدف", group=grpStyle)
+
+// ============================== PALETTE =====================================
+colBullish  = #00E396
+colBearish  = #FF4560
+colGold     = #D4AF37
+colGoldSoft = #F5D06F
+colTeal     = #17C3B2
+colAsia     = #7B61FF
+colLondon   = #17C3B2
+colNy       = #F5A623
+colPanelBg  = #0D1321
+colPanelBg2 = #131B2E
+colGrey     = #7F8FA6
+
+// ============================== CORE CALCULATIONS =================================
+atrVal = ta.atr(atrLen)
+
+[superTrend, superDir] = ta.supertrend(stFactor, stAtrLen)
+trendUp   = superDir < 0
+trendDown = superDir > 0
+
+rmiUp   = ta.rma(math.max(close - close[rmiMomLen], 0), rmiLen)
+rmiDown = ta.rma(math.max(close[rmiMomLen] - close, 0), rmiLen)
+rmiVal  = rmiDown == 0 ? 100 : rmiUp == 0 ? 0 : 100 - (100 / (1 + rmiUp / rmiDown))
+rmiBull = rmiVal > rmiMid
+rmiBear = rmiVal < rmiMid
+
+ribbonBase     = ta.hma(close, ribbonLen)
+ribbonBull     = trendUp   and (not useRmiTrend or rmiBull)
+ribbonBear     = trendDown and (not useRmiTrend or rmiBear)
+ribbonColor    = ribbonBull ? colBullish : ribbonBear ? colBearish : colGoldSoft
+ribbonFlipBull = ribbonBull and not ribbonBull[1]
+ribbonFlipBear = ribbonBear and not ribbonBear[1]
+
+rsiVal = ta.rsi(close, rsiLen)
+
+volSma     = ta.sma(volume, volLen)
+volConfirm = volume > volSma * volMult
+
+// ============================== REGIME (Kaufman Efficiency Ratio) =================================
+erChange       = math.abs(close - close[erLen])
+erVolatility   = ta.sma(math.abs(close - close[1]), erLen) * erLen
+erVal          = erVolatility == 0 ? 0.0 : erChange / erVolatility
+regimeTrending = erVal >= erThreshold
+
+// ============================== MTF BIAS =================================
+mtfEma   = request.security(syminfo.tickerid, mtfTf, ta.ema(close, mtfLen), lookahead=barmerge.lookahead_off)
+mtfClose = request.security(syminfo.tickerid, mtfTf, close, lookahead=barmerge.lookahead_off)
+mtfBull  = useMtf and mtfClose > mtfEma
+mtfBear  = useMtf and mtfClose < mtfEma
+
+// ============================== SESSIONS =================================
+inAsia   = not na(time(timeframe.period, asiaSess, sessTz))
+inLondon = not na(time(timeframe.period, londonSess, sessTz))
+inNY     = not na(time(timeframe.period, nySess, sessTz))
+sessionName   = inAsia ? "ASIA" : inLondon ? "LONDON" : inNY ? "NEW YORK" : "OFF-HOURS"
+sessionActive = inAsia or inLondon or inNY
+
+var box asiaBox   = na
+var box londonBox = na
+var box nyBox     = na
+
+if showSessions
+    if inAsia and (na(asiaBox) or not inAsia[1])
+        asiaBox := box.new(bar_index, high, bar_index, low, border_color=color.new(colAsia, 60), bgcolor=color.new(colAsia, 90), border_width=1)
+    if inAsia
+        box.set_right(asiaBox, bar_index)
+        box.set_top(asiaBox, math.max(box.get_top(asiaBox), high))
+        box.set_bottom(asiaBox, math.min(box.get_bottom(asiaBox), low))
+
+    if inLondon and (na(londonBox) or not inLondon[1])
+        londonBox := box.new(bar_index, high, bar_index, low, border_color=color.new(colLondon, 60), bgcolor=color.new(colLondon, 90), border_width=1)
+    if inLondon
+        box.set_right(londonBox, bar_index)
+        box.set_top(londonBox, math.max(box.get_top(londonBox), high))
+        box.set_bottom(londonBox, math.min(box.get_bottom(londonBox), low))
+
+    if inNY and (na(nyBox) or not inNY[1])
+        nyBox := box.new(bar_index, high, bar_index, low, border_color=color.new(colNy, 60), bgcolor=color.new(colNy, 90), border_width=1)
+    if inNY
+        box.set_right(nyBox, bar_index)
+        box.set_top(nyBox, math.max(box.get_top(nyBox), high))
+        box.set_bottom(nyBox, math.min(box.get_bottom(nyBox), low))
+
+// ============================== MARKET STRUCTURE (BOS/CHoCH) =================================
+var float lastSwingHigh    = na
+var float lastSwingLow     = na
+var int   lastSwingHighBar = na
+var int   lastSwingLowBar  = na
+var int   structTrend      = 0
+
+structPivHigh = ta.pivothigh(structSwingLen, structSwingLen)
+structPivLow  = ta.pivotlow(structSwingLen, structSwingLen)
+
+if not na(structPivHigh)
+    lastSwingHigh := structPivHigh
+    lastSwingHighBar := bar_index - structSwingLen
+if not na(structPivLow)
+    lastSwingLow := structPivLow
+    lastSwingLowBar := bar_index - structSwingLen
+
+bosUp   = not na(lastSwingHigh) and ta.crossover(close, lastSwingHigh)
+bosDown = not na(lastSwingLow)  and ta.crossunder(close, lastSwingLow)
+
+if bosUp
+    if showStructure
+        label.new(bar_index, low - atrVal * 0.9, structTrend <= 0 ? "CHoCH ▲" : "BOS ▲", style=label.style_label_up, color=color.new(colBullish, 70), textcolor=colBullish, size=size.tiny)
+    structTrend := 1
+if bosDown
+    if showStructure
+        label.new(bar_index, high + atrVal * 0.9, structTrend >= 0 ? "CHoCH ▼" : "BOS ▼", style=label.style_label_down, color=color.new(colBearish, 70), textcolor=colBearish, size=size.tiny)
+    structTrend := -1
+
+// ============================== LIQUIDITY SWEEPS (EQH/EQL) =================================
+sweepBear = enableSweeps and not na(lastSwingHigh) and high > lastSwingHigh and close < lastSwingHigh and (bar_index - lastSwingHighBar) <= sweepLookback
+sweepBull = enableSweeps and not na(lastSwingLow)  and low  < lastSwingLow  and close > lastSwingLow  and (bar_index - lastSwingLowBar)  <= sweepLookback
+
+var string lastSweepType = "NONE"
+var int    lastSweepBar  = na
+
+if sweepBear
+    lastSweepType := "BEAR SWEEP"
+    lastSweepBar := bar_index
+    if showSweeps
+        label.new(bar_index, high + atrVal * 0.3, "EQH Sweep", style=label.style_label_down, color=color.new(colBearish, 20), textcolor=color.white, size=size.tiny)
+if sweepBull
+    lastSweepType := "BULL SWEEP"
+    lastSweepBar := bar_index
+    if showSweeps
+        label.new(bar_index, low - atrVal * 0.3, "EQL Sweep", style=label.style_label_up, color=color.new(colBullish, 20), textcolor=color.white, size=size.tiny)
+
+sweepRecentBull = lastSweepType == "BULL SWEEP" and not na(lastSweepBar) and (bar_index - lastSweepBar) <= sweepLookback
+sweepRecentBear = lastSweepType == "BEAR SWEEP" and not na(lastSweepBar) and (bar_index - lastSweepBar) <= sweepLookback
+
+// ============================== OTE ZONE (Optimal Trade Entry) =================================
+var box   oteBoxBull = na
+var box   oteBoxBear = na
+var float oteTopBull = na
+var float oteBotBull = na
+var float oteTopBear = na
+var float oteBotBear = na
+
+if bosUp and not na(lastSwingLow) and not na(lastSwingHigh) and lastSwingHigh > lastSwingLow
+    legRangeUp = lastSwingHigh - lastSwingLow
+    oteTopBull := lastSwingHigh - legRangeUp * oteFibNear
+    oteBotBull := lastSwingHigh - legRangeUp * oteFibFar
+    box.delete(oteBoxBull)
+    oteBoxBull := box.new(bar_index, oteTopBull, bar_index + oteExtendBars, oteBotBull, border_color=showOte ? color.new(colBullish, 30) : color.new(colBullish, 100), bgcolor=showOte ? color.new(colBullish, 85) : color.new(colBullish, 100), text=showOte ? "OTE" : "", text_size=size.tiny, text_color=showOte ? colBullish : color.new(colBullish, 100))
+
+if bosDown and not na(lastSwingLow) and not na(lastSwingHigh) and lastSwingHigh > lastSwingLow
+    legRangeDown = lastSwingHigh - lastSwingLow
+    oteTopBear := lastSwingLow + legRangeDown * oteFibFar
+    oteBotBear := lastSwingLow + legRangeDown * oteFibNear
+    box.delete(oteBoxBear)
+    oteBoxBear := box.new(bar_index, oteTopBear, bar_index + oteExtendBars, oteBotBear, border_color=showOte ? color.new(colBearish, 30) : color.new(colBearish, 100), bgcolor=showOte ? color.new(colBearish, 85) : color.new(colBearish, 100), text=showOte ? "OTE" : "", text_size=size.tiny, text_color=showOte ? colBearish : color.new(colBearish, 100))
+
+priceInOteBull = not na(oteBoxBull) and not na(oteTopBull) and close <= oteTopBull and close >= oteBotBull
+priceInOteBear = not na(oteBoxBear) and not na(oteTopBear) and close <= oteTopBear and close >= oteBotBear
+
+// ============================== MAJOR SUPPORT & RESISTANCE =================================
+type SRLevel
+    float price
+    int   touches
+    int   kind
+    line  ln
+
+var array<SRLevel> srLevels = array.new<SRLevel>()
+
+srPivHigh = ta.pivothigh(srSwingLen, srSwingLen)
+srPivLow  = ta.pivotlow(srSwingLen, srSwingLen)
+
+srRegisterLevel(price, kind) =>
+    mergeTol = atrVal * srMergeAtr
+    matchedIdx = -1
+    if array.size(srLevels) > 0
+        for i = 0 to array.size(srLevels) - 1
+            lvl = array.get(srLevels, i)
+            if math.abs(lvl.price - price) <= mergeTol
+                matchedIdx := i
+    if matchedIdx >= 0
+        lvl = array.get(srLevels, matchedIdx)
+        lvl.touches := lvl.touches + 1
+        lvl.price := (lvl.price + price) / 2
+        if showSR and lvl.touches >= srMinTouches
+            lvlColor = lvl.kind == 1 ? color.new(colBearish, 40) : color.new(colBullish, 40)
+            lw = math.min(srLineWidth + lvl.touches - srMinTouches, srLineWidth + 3)
+            if na(lvl.ln)
+                lvl.ln := line.new(bar_index, lvl.price, bar_index, lvl.price, extend=extend.right, color=lvlColor, width=lw)
+            else
+                line.set_y1(lvl.ln, lvl.price)
+                line.set_y2(lvl.ln, lvl.price)
+                line.set_color(lvl.ln, lvlColor)
+                line.set_width(lvl.ln, lw)
+    else
+        newLvl = SRLevel.new(price, 1, kind, na)
+        array.push(srLevels, newLvl)
+        if array.size(srLevels) > srMaxLevels
+            weakIdx = 0
+            weakTouches = array.get(srLevels, 0).touches
+            for i = 1 to array.size(srLevels) - 1
+                t = array.get(srLevels, i).touches
+                if t < weakTouches
+                    weakTouches := t
+                    weakIdx := i
+            weakLvl = array.get(srLevels, weakIdx)
+            if not na(weakLvl.ln)
+                line.delete(weakLvl.ln)
+            array.remove(srLevels, weakIdx)
+    matchedIdx
+
+if not na(srPivHigh)
+    srRegisterLevel(srPivHigh, 1)
+if not na(srPivLow)
+    srRegisterLevel(srPivLow, -1)
+
+var label majorRLabel = na
+var label majorSLabel = na
+
+if showSR and showMajorLabel and array.size(srLevels) > 0
+    bestRIdx = -1
+    bestRTouch = -1
+    bestSIdx = -1
+    bestSTouch = -1
+    for i = 0 to array.size(srLevels) - 1
+        lvl = array.get(srLevels, i)
+        if lvl.kind == 1 and lvl.touches > bestRTouch
+            bestRTouch := lvl.touches
+            bestRIdx := i
+        if lvl.kind == -1 and lvl.touches > bestSTouch
+            bestSTouch := lvl.touches
+            bestSIdx := i
+    if bestRIdx >= 0
+        bestR = array.get(srLevels, bestRIdx)
+        if bestR.touches >= srMinTouches
+            if na(majorRLabel)
+                majorRLabel := label.new(bar_index, bestR.price, "Major R", style=label.style_label_left, color=color.new(colBearish, 60), textcolor=colBearish, size=size.tiny)
+            else
+                label.set_xy(majorRLabel, bar_index, bestR.price)
+    if bestSIdx >= 0
+        bestS = array.get(srLevels, bestSIdx)
+        if bestS.touches >= srMinTouches
+            if na(majorSLabel)
+                majorSLabel := label.new(bar_index, bestS.price, "Major S", style=label.style_label_left, color=color.new(colBullish, 60), textcolor=colBullish, size=size.tiny)
+            else
+                label.set_xy(majorSLabel, bar_index, bestS.price)
+
+// ============================== APPROXIMATE CVD =================================
+barRange   = high - low
+buyPortion = barRange == 0 ? 0.5 : (close - low) / barRange
+deltaVol   = volume * (2 * buyPortion - 1)
+
+var float cvdCum = 0.0
+newDay = ta.change(dayofmonth) != 0
+if enableCvd
+    if cvdResetDaily and newDay
+        cvdCum := 0.0
+    cvdCum := cvdCum + deltaVol
+
+cvdBull = cvdCum >= 0
+
+// ============================== CONFLUENCE SCORE =================================
+possibleBull = wTrend + wStruct + (useMtf ? wMtf : 0) + wSweep + wOte + wRsi + wVolume + wRegime
+achievedBull = (ribbonBull ? wTrend : 0) + (structTrend >= 0 ? wStruct : 0) + (useMtf and mtfBull ? wMtf : 0) + (sweepRecentBull ? wSweep : 0) + (priceInOteBull ? wOte : 0) + (rsiVal < rsiOB ? wRsi : 0) + (volConfirm ? wVolume : 0) + (regimeTrending ? wRegime : 0)
+scoreBullPct = possibleBull > 0 ? achievedBull / possibleBull * 100 : 0.0
+
+possibleBear = wTrend + wStruct + (useMtf ? wMtf : 0) + wSweep + wOte + wRsi + wVolume + wRegime
+achievedBear = (ribbonBear ? wTrend : 0) + (structTrend <= 0 ? wStruct : 0) + (useMtf and mtfBear ? wMtf : 0) + (sweepRecentBear ? wSweep : 0) + (priceInOteBear ? wOte : 0) + (rsiVal > rsiOS ? wRsi : 0) + (volConfirm ? wVolume : 0) + (regimeTrending ? wRegime : 0)
+scoreBearPct = possibleBear > 0 ? achievedBear / possibleBear * 100 : 0.0
+
+score = trendUp ? scoreBullPct : scoreBearPct
+
+// ============================== SIGNAL ENGINE =================================
+longCond  = ribbonFlipBull and scoreBullPct >= minScoreEntry
+shortCond = ribbonFlipBear and scoreBearPct >= minScoreEntry
+isGoldenLong  = longCond  and scoreBullPct >= goldenScore
+isGoldenShort = shortCond and scoreBearPct >= goldenScore
+
+var int    posDir      = 0
+var float  entryPrice  = na
+var float  stopLevel   = na
+var float  targetLevel = na
+var string exitReason  = ""
+
+hitStopLong    = posDir == 1  and low  <= stopLevel
+hitTargetLong  = posDir == 1  and high >= targetLevel
+hitStopShort   = posDir == -1 and high >= stopLevel
+hitTargetShort = posDir == -1 and low  <= targetLevel
+
+exitLong  = posDir == 1  and (ribbonFlipBear or hitStopLong or hitTargetLong)
+exitShort = posDir == -1 and (ribbonFlipBull or hitStopShort or hitTargetShort)
+
+if longCond and posDir != 1
+    posDir := 1
+    entryPrice := close
+    stopLevel := superTrend
+    targetLevel := close + (close - superTrend) * rrRatio
+
+if shortCond and posDir != -1
+    posDir := -1
+    entryPrice := close
+    stopLevel := superTrend
+    targetLevel := close - (superTrend - close) * rrRatio
+
+if exitLong
+    exitReason := hitTargetLong ? "TP" : hitStopLong ? "SL" : "FLIP"
+    posDir := 0
+
+if exitShort
+    exitReason := hitTargetShort ? "TP" : hitStopShort ? "SL" : "FLIP"
+    posDir := 0
+
+// ============================== LOT SIZE CALCULATOR =================================
+riskAmount    = accountBalance * riskPercent / 100
+stopDistance  = posDir != 0 ? math.abs(entryPrice - stopLevel) : na
+unitsSize     = (not na(stopDistance) and stopDistance > 0) ? riskAmount / stopDistance : na
+lotSize       = not na(unitsSize) ? unitsSize / contractSize : na
+
+// ============================== PLOTTING =================================
+plot(ribbonGlow ? ribbonBase : na, "Ribbon Glow", color=color.new(ribbonColor, 70), linewidth=ribbonWidth + 4)
+plot(ribbonBase, "Trend Ribbon", color=ribbonColor, linewidth=ribbonWidth)
+
+if showEntryLabels and longCond
+    longTxt = (isGoldenLong ? "⭐ GOLDEN BUY\n" : "▲ BUY\n") + "Entry: " + str.tostring(close, format.mintick) + "\nScore: " + str.tostring(scoreBullPct, "#") + "%"
+    label.new(bar_index, low - atrVal * 0.6, longTxt, style=label.style_label_up, color=isGoldenLong ? color.new(colGold, 10) : color.new(colBullish, 15), textcolor=color.white, size=size.small)
+
+if showEntryLabels and shortCond
+    shortTxt = (isGoldenShort ? "⭐ GOLDEN SELL\n" : "▼ SELL\n") + "Entry: " + str.tostring(close, format.mintick) + "\nScore: " + str.tostring(scoreBearPct, "#") + "%"
+    label.new(bar_index, high + atrVal * 0.6, shortTxt, style=label.style_label_down, color=isGoldenShort ? color.new(colGold, 10) : color.new(colBearish, 15), textcolor=color.white, size=size.small)
+
+var line entryLine  = na
+var line stopLine   = na
+var line targetLine = na
+
+if showLevels
+    if longCond or shortCond
+        line.delete(entryLine)
+        line.delete(stopLine)
+        line.delete(targetLine)
+        entryLine  := line.new(bar_index, entryPrice, bar_index + 1, entryPrice, extend=extend.right, color=color.new(colGoldSoft, 40), style=line.style_dotted, width=1)
+        stopLine   := line.new(bar_index, stopLevel, bar_index + 1, stopLevel, extend=extend.right, color=color.new(colBearish, 30), style=line.style_dashed, width=1)
+        targetLine := line.new(bar_index, targetLevel, bar_index + 1, targetLevel, extend=extend.right, color=color.new(colBullish, 30), style=line.style_dashed, width=1)
+    if posDir == 0 and (exitLong or exitShort)
+        line.delete(entryLine)
+        line.delete(stopLine)
+        line.delete(targetLine)
+
+// ============================== DASHBOARD =================================
+tableSize = dashSize == "small" ? size.small : dashSize == "large" ? size.large : size.normal
+
+if showDashboard
+    var table dash = table.new(position.top_right, 2, 13, border_width=1)
+
+    table.cell(dash, 0, 0, "APEX Confluence", text_color=colGoldSoft, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 0, syminfo.ticker, text_color=color.white, bgcolor=colPanelBg, text_size=tableSize)
+
+    table.merge_cells(dash, 0, 1, 1, 1)
+    table.cell(dash, 0, 1, "Rule-Based Engine — No Black-Box AI", text_color=colGold, bgcolor=colPanelBg2, text_size=size.tiny, text_halign=text.align_center)
+
+    sigTxt = posDir == 1 ? "LONG ●" : posDir == -1 ? "SHORT ●" : "STANDBY"
+    sigCol = posDir == 1 ? colBullish : posDir == -1 ? colBearish : colGrey
+    table.cell(dash, 0, 2, "SIGNAL", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 2, sigTxt, text_color=sigCol, bgcolor=colPanelBg, text_size=tableSize)
+
+    table.cell(dash, 0, 3, "CONF SCORE", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 3, str.tostring(score, "#") + "%", text_color=score >= goldenScore ? colGold : score >= minScoreEntry ? colBullish : colGrey, bgcolor=colPanelBg2, text_size=tableSize)
+
+    table.cell(dash, 0, 4, "ENTRY / RRR", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 4, (posDir != 0 ? str.tostring(entryPrice, format.mintick) : "—") + "  1:" + str.tostring(rrRatio, "#.#"), text_color=colGoldSoft, bgcolor=colPanelBg, text_size=tableSize)
+
+    table.cell(dash, 0, 5, "REGIME", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 5, (regimeTrending ? "TRENDING" : "RANGING") + "  ER:" + str.tostring(erVal, "#.##"), text_color=regimeTrending ? colBullish : colGrey, bgcolor=colPanelBg2, text_size=tableSize)
+
+    table.cell(dash, 0, 6, "SESSION", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 6, sessionName, text_color=sessionActive ? colGold : colGrey, bgcolor=colPanelBg, text_size=tableSize)
+
+    mtfTxt = not useMtf ? "معطّل" : mtfBull ? "BULLISH" : mtfBear ? "BEARISH" : "NEUTRAL"
+    mtfCol = mtfBull ? colBullish : mtfBear ? colBearish : colGrey
+    table.cell(dash, 0, 7, "MTF (" + mtfTf + ")", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 7, mtfTxt, text_color=mtfCol, bgcolor=colPanelBg2, text_size=tableSize)
+
+    rsiCol = rsiVal > rsiOB ? colBearish : rsiVal < rsiOS ? colBullish : color.white
+    table.cell(dash, 0, 8, "RSI", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 8, str.tostring(rsiVal, "#.#"), text_color=rsiCol, bgcolor=colPanelBg, text_size=tableSize)
+
+    table.cell(dash, 0, 9, "SWEEPS", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 9, lastSweepType, text_color=lastSweepType == "BULL SWEEP" ? colBullish : lastSweepType == "BEAR SWEEP" ? colBearish : colGrey, bgcolor=colPanelBg2, text_size=tableSize)
+
+    table.cell(dash, 0, 10, "VOLUME / ATR", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 10, str.tostring(volume / volSma, "#.##") + "x  " + str.tostring(atrVal, "#.##"), text_color=volConfirm ? colGold : colGrey, bgcolor=colPanelBg, text_size=tableSize)
+
+    cvdTxt = enableCvd ? str.tostring(cvdCum, "#") + (cvdBull ? " ▲" : " ▼") : "معطّل"
+    table.cell(dash, 0, 11, "CVD", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 11, cvdTxt, text_color=cvdBull ? colBullish : colBearish, bgcolor=colPanelBg2, text_size=tableSize)
+
+    table.cell(dash, 0, 12, "LOT SIZE", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 12, "$" + str.tostring(riskAmount, "#") + " → " + (not na(lotSize) ? str.tostring(lotSize, "#.##") + " Lots" : "—"), text_color=colGoldSoft, bgcolor=colPanelBg, text_size=tableSize)
+
+// ============================== ALERTS =================================
+alertcondition(longCond, title="APEX Buy Signal", message="APEX Confluence: BUY {{ticker}} @ {{close}}")
+alertcondition(shortCond, title="APEX Sell Signal", message="APEX Confluence: SELL {{ticker}} @ {{close}}")
+alertcondition(exitLong or exitShort, title="APEX Exit Signal", message="APEX Confluence: EXIT {{ticker}} @ {{close}}")
