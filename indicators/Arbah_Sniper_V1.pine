@@ -171,22 +171,21 @@ exitShort = posDir == -1 and (hitStopShort or hitTargetShort or chochUp)
 
 // Exits are processed before new entries so a same-bar exit always tags the
 // label of the trade that's actually closing, never a brand-new one.
+// Note: the label's background color always stays tied to the trade
+// direction (green = BUY, red = SELL) — only the appended text conveys
+// win/loss, so a losing BUY never gets recolored to look like a SELL.
 if exitLong
     exitReason := hitTargetLong ? "TP" : hitStopLong ? "SL" : "CHoCH"
     if not na(activeTradeLabel)
         outcomeTxt = hitTargetLong ? "\n✅ TARGET HIT" : hitStopLong ? "\n❌ STOP HIT" : "\n⚠️ CLOSED (CHoCH)"
-        outcomeCol = hitTargetLong ? colBullish : hitStopLong ? colBearish : colGrey
         label.set_text(activeTradeLabel, label.get_text(activeTradeLabel) + outcomeTxt)
-        label.set_color(activeTradeLabel, color.new(outcomeCol, 10))
     posDir := 0
 
 if exitShort
     exitReason := hitTargetShort ? "TP" : hitStopShort ? "SL" : "CHoCH"
     if not na(activeTradeLabel)
         outcomeTxt = hitTargetShort ? "\n✅ TARGET HIT" : hitStopShort ? "\n❌ STOP HIT" : "\n⚠️ CLOSED (CHoCH)"
-        outcomeCol = hitTargetShort ? colBullish : hitStopShort ? colBearish : colGrey
         label.set_text(activeTradeLabel, label.get_text(activeTradeLabel) + outcomeTxt)
-        label.set_color(activeTradeLabel, color.new(outcomeCol, 10))
     posDir := 0
 
 if longCond
