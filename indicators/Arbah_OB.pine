@@ -1,0 +1,196 @@
+//@version=6
+// ============================================================================
+//  Arbah OB  |  آرباه أوردر بلوك
+//  A focused Order Block visualizer — nothing else drawn on the chart.
+//  Precision is enforced by three filters working together:
+//  1) An Order Block only forms off a genuine structure break (a close
+//     crossing the last confirmed swing high/low).
+//  2) The breaking candle must show real displacement (body >= an ATR
+//     multiple) — filters out weak/noisy breaks that aren't real
+//     institutional order flow.
+//  3) A max-active-zones cap + overlap suppression + instant deletion on
+//     mitigation keeps the chart from ever filling up with stale boxes.
+//  Dashboard adds RSI and MACD alongside a live count of active zones.
+// ============================================================================
+indicator("Arbah OB", shorttitle="ArbahOB", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500)
+
+// ============================== INPUTS =====================================
+grpStruct = "🧭 هيكل السوق — Structure"
+structSwingLen = input.int(5, "طول سوينج هيكل السوق", minval=2, group=grpStruct)
+
+grpOb = "🧱 الأوردر بلوك — Order Blocks"
+obLookback         = input.int(15, "أقصى عدد شموع للبحث عن الأوردر بلوك", minval=3, group=grpOb, tooltip="آخر شمعة معاكسة قبل اندفاع كسر الهيكل — دي منطقة الأوردر بلوك")
+displacementMult   = input.float(1.2, "أقل قوة اندفاع لاعتماد الكسر (× ATR)", step=0.1, minval=0.1, group=grpOb, tooltip="يشترط إن شمعة كسر الهيكل يكون حجمها حقيقي (اندفاع مؤسسي) مش تذبذب عادي — أهم فلتر للدقة")
+obZoneBasis        = input.string("Wick", "حدود المنطقة", options=["Wick", "Body"], group=grpOb, tooltip="Wick = أعلى/أقل سعر للشمعة (كلاسيكي)، Body = جسم الشمعة فقط (منطقة أضيق وأدق)")
+maxObPerSide       = input.int(3, "أقصى عدد مناطق نشطة لكل اتجاه", minval=1, maxval=10, group=grpOb, tooltip="بيمنع تكدس مناطق كتير على الشارت — الأقدم بيتشال أول ما العدد يزيد")
+overlapSuppressPct = input.float(50, "تجاهل منطقة جديدة لو تداخلت مع موجودة بنسبة ≥ %", step=5, minval=0, maxval=100, group=grpOb)
+obMaxAge           = input.int(150, "أقصى عمر للمنطقة بالشموع (0 = بلا حد)", minval=0, group=grpOb)
+showObText         = input.bool(true, "إظهار كلمة OB داخل المنطقة", group=grpOb)
+
+grpMom = "⚡ الزخم — RSI & MACD"
+atrLen   = input.int(14, "فترة ATR (لفلتر الاندفاع)", group=grpMom)
+rsiLen   = input.int(14, "فترة RSI", group=grpMom)
+rsiOB    = input.int(70, "تشبع شرائي", group=grpMom)
+rsiOS    = input.int(30, "تشبع بيعي", group=grpMom)
+macdFast = input.int(12, "MACD Fast", group=grpMom)
+macdSlow = input.int(26, "MACD Slow", group=grpMom)
+macdSig  = input.int(9,  "MACD Signal", group=grpMom)
+
+grpStyle = "🎨 التصميم — Style"
+showDashboard = input.bool(true, "إظهار لوحة المعلومات", group=grpStyle)
+dashSize      = input.string("normal", "حجم اللوحة", options=["small", "normal", "large"], group=grpStyle)
+
+// ============================== PALETTE =====================================
+colPanelBg  = #0D1321
+colPanelBg2 = #131B2E
+colGold     = #D4AF37
+colGoldSoft = #F5D06F
+colBullish  = #00E396
+colBearish  = #FF4560
+colGrey     = #7F8FA6
+
+// ============================== CORE CALCULATIONS =================================
+atrVal = ta.atr(atrLen)
+
+rsiVal = ta.rsi(close, rsiLen)
+[macdLine, macdSignal, macdHist] = ta.macd(close, macdFast, macdSlow, macdSig)
+
+// ---- Market structure (pivots) ----
+var float lastSwingHigh = na
+var float lastSwingLow  = na
+
+structPivHigh = ta.pivothigh(structSwingLen, structSwingLen)
+structPivLow  = ta.pivotlow(structSwingLen, structSwingLen)
+
+if not na(structPivHigh)
+    lastSwingHigh := structPivHigh
+if not na(structPivLow)
+    lastSwingLow := structPivLow
+
+bosUp   = not na(lastSwingHigh) and ta.crossover(close, lastSwingHigh)
+bosDown = not na(lastSwingLow)  and ta.crossunder(close, lastSwingLow)
+
+displacementOk = math.abs(close - open) >= atrVal * displacementMult
+
+// ============================== ORDER BLOCK ENGINE =================================
+findLastOppositeIdx(bearish, maxLookback) =>
+    idx = -1
+    for i = 1 to maxLookback
+        cond = bearish ? (close[i] < open[i]) : (close[i] > open[i])
+        if cond
+            idx := i
+            break
+    idx
+
+type OB
+    float top
+    float bot
+    int   barIdx
+    box   b
+
+var array<OB> bullObs = array.new<OB>()
+var array<OB> bearObs = array.new<OB>()
+
+overlapPct(top1, bot1, top2, bot2) =>
+    ovTop = math.min(top1, top2)
+    ovBot = math.max(bot1, bot2)
+    ovRange = math.max(ovTop - ovBot, 0.0)
+    range1 = top1 - bot1
+    range1 <= 0 ? 0.0 : ovRange / range1 * 100.0
+
+hasOverlap(arr, top, bot, thresholdPct) =>
+    found = false
+    if array.size(arr) > 0
+        for i = 0 to array.size(arr) - 1
+            ob = array.get(arr, i)
+            if overlapPct(top, bot, ob.top, ob.bot) >= thresholdPct
+                found := true
+    found
+
+addOB(bullish, idx) =>
+    top = obZoneBasis == "Body" ? math.max(open[idx], close[idx]) : high[idx]
+    bot = obZoneBasis == "Body" ? math.min(open[idx], close[idx]) : low[idx]
+    arr = bullish ? bullObs : bearObs
+    created = false
+    if not hasOverlap(arr, top, bot, overlapSuppressPct)
+        zoneCol = bullish ? colBullish : colBearish
+        newBox = box.new(bar_index - idx, top, bar_index, bot, border_color=color.new(zoneCol, 30), bgcolor=color.new(zoneCol, 85), border_width=1, text=showObText ? "OB" : "", text_size=size.tiny, text_color=color.new(zoneCol, 0))
+        newOb = OB.new(top, bot, bar_index - idx, newBox)
+        array.unshift(arr, newOb)
+        if array.size(arr) > maxObPerSide
+            oldest = array.pop(arr)
+            box.delete(oldest.b)
+        created := true
+    created
+
+// ---- Mitigation cleanup (runs every bar, keeps only live zones) ----
+if array.size(bullObs) > 0
+    for i = array.size(bullObs) - 1 to 0
+        ob = array.get(bullObs, i)
+        mitigated = close < ob.bot
+        aged = obMaxAge > 0 and (bar_index - ob.barIdx) > obMaxAge
+        if mitigated or aged
+            box.delete(ob.b)
+            array.remove(bullObs, i)
+        else
+            box.set_right(ob.b, bar_index)
+
+if array.size(bearObs) > 0
+    for i = array.size(bearObs) - 1 to 0
+        ob = array.get(bearObs, i)
+        mitigated = close > ob.top
+        aged = obMaxAge > 0 and (bar_index - ob.barIdx) > obMaxAge
+        if mitigated or aged
+            box.delete(ob.b)
+            array.remove(bearObs, i)
+        else
+            box.set_right(ob.b, bar_index)
+
+// ---- New Order Block creation (only off a genuine, displaced structure break) ----
+bullObCreated = false
+bearObCreated = false
+
+if bosUp and displacementOk
+    idxBull = findLastOppositeIdx(true, obLookback)
+    if idxBull >= 0
+        bullObCreated := addOB(true, idxBull)
+
+if bosDown and displacementOk
+    idxBear = findLastOppositeIdx(false, obLookback)
+    if idxBear >= 0
+        bearObCreated := addOB(false, idxBear)
+
+// ============================== DASHBOARD =================================
+tableSize = dashSize == "small" ? size.small : dashSize == "large" ? size.large : size.normal
+
+if showDashboard
+    var table dash = table.new(position.top_right, 2, 7, border_width=1)
+
+    table.cell(dash, 0, 0, "Arbah OB", text_color=colGoldSoft, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 0, syminfo.ticker, text_color=color.white, bgcolor=colPanelBg, text_size=tableSize)
+
+    table.merge_cells(dash, 0, 1, 1, 1)
+    table.cell(dash, 0, 1, "Order Block Zones — Arbah Markets", text_color=colGold, bgcolor=colPanelBg2, text_size=size.tiny, text_halign=text.align_center)
+
+    table.cell(dash, 0, 2, "Bull OB Zones", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 2, str.tostring(array.size(bullObs)), text_color=colBullish, bgcolor=colPanelBg, text_size=tableSize)
+
+    table.cell(dash, 0, 3, "Bear OB Zones", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 3, str.tostring(array.size(bearObs)), text_color=colBearish, bgcolor=colPanelBg2, text_size=tableSize)
+
+    rsiTxt = str.tostring(rsiVal, "#.#") + (rsiVal > rsiOB ? " OB" : rsiVal < rsiOS ? " OS" : "")
+    rsiCol = rsiVal > rsiOB ? colBearish : rsiVal < rsiOS ? colBullish : color.white
+    table.cell(dash, 0, 4, "RSI", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 4, rsiTxt, text_color=rsiCol, bgcolor=colPanelBg, text_size=tableSize)
+
+    table.cell(dash, 0, 5, "MACD", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 5, str.tostring(macdLine, "#.####") + " / " + str.tostring(macdSignal, "#.####"), text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize)
+
+    macdTxt = macdHist > 0 ? "Bullish ▲" : macdHist < 0 ? "Bearish ▼" : "Neutral ●"
+    macdCol = macdHist > 0 ? colBullish : macdHist < 0 ? colBearish : colGrey
+    table.cell(dash, 0, 6, "MACD Momentum", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 6, macdTxt, text_color=macdCol, bgcolor=colPanelBg, text_size=tableSize)
+
+// ============================== ALERTS =================================
+alertcondition(bullObCreated, title="New Bullish Order Block", message="Arbah OB: New Bullish Order Block on {{ticker}}")
+alertcondition(bearObCreated, title="New Bearish Order Block", message="Arbah OB: New Bearish Order Block on {{ticker}}")
