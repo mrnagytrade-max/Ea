@@ -1,12 +1,12 @@
 //@version=6
 // ============================================================================
 //  Arbah Sniper V1  |  آرباه سنايبر
-//  Scalping entry engine for M5-M15, built on exactly three pillars:
+//  Scalping entry engine for M5-M15, built on exactly two pillars:
 //  1) Market Structure + CHoCH (Change of Character) to time reversals
 //  2) The Order Block that caused the CHoCH break (last opposite candle
-//     before the impulse leg) as the only entry zone
-//  3) A Price Action confirmation candle (engulfing / pin bar) inside that
-//     zone to trigger the trade — no trend ribbon, no RSI/MACD/MTF/CVD.
+//     before the impulse leg) as the only entry zone — entry fires the
+//     moment price returns to tag that zone. No trend ribbon, no
+//     RSI/MACD/MTF/CVD, no price-action filter.
 //  Every signal ships with its own tight SL/TP (sized off the Order Block
 //  itself, capped by an ATR multiple so stops stay small on low timeframes).
 // ============================================================================
@@ -24,10 +24,6 @@ obExtendBars   = input.int(60, "امتداد رسم المنطقة (عدد شم�
 obBufferAtr    = input.float(0.15, "هامش وقف الخسارة خارج المنطقة (× ATR)", step=0.05, minval=0, group=grpOb)
 maxStopAtrMult = input.float(3.0, "أقصى مسافة وقف مقبولة (× ATR)", step=0.5, minval=0.5, group=grpOb, tooltip="لو مسافة الوقف من حافة الأوردر بلوك أكبر من كذا × ATR يتم تجاهل الإشارة — بيخلي الاستوبات صغيرة ومناسبة للفريمات القصيرة")
 showObZones    = input.bool(true, "رسم مناطق الأوردر بلوك على الشارت", group=grpOb)
-
-grpPA = "🕯️ برايس أكشن — Price Action Filter"
-pinBarMult       = input.float(1.5, "أقل نسبة فتيل/جسم لاعتبارها Pin Bar", step=0.1, minval=1.0, group=grpPA)
-requireEngulfOnly = input.bool(false, "الاكتفاء بنموذج الابتلاع (Engulfing) فقط وتجاهل Pin Bar", group=grpPA)
 
 grpRisk = "🛡️ إدارة المخاطر — Risk Management"
 atrLen       = input.int(14, "فترة ATR", group=grpRisk)
@@ -135,26 +131,12 @@ if obActiveBear and (close > obTopBear or (bar_index - obBarBear) > obMaxAge)
     obActiveBear := false
     box.delete(obBoxBear)
 
-// ---- Price Action confirmation ----
-bullEngulf = close > open and close[1] < open[1] and close >= open[1] and open <= close[1]
-bearEngulf = close < open and close[1] > open[1] and close <= open[1] and open >= close[1]
-
-bodySize  = math.abs(close - open)
-lowerWick = math.min(close, open) - low
-upperWick = high - math.max(close, open)
-bullPinBar = bodySize > 0 and lowerWick >= bodySize * pinBarMult and close > open
-bearPinBar = bodySize > 0 and upperWick >= bodySize * pinBarMult and close < open
-
-bullPA = requireEngulfOnly ? bullEngulf : (bullEngulf or bullPinBar)
-bearPA = requireEngulfOnly ? bearEngulf : (bearEngulf or bearPinBar)
-
 // ============================== SIGNAL ENGINE =================================
 var int    posDir      = 0
 var float  entryPrice  = na
 var float  stopLevel   = na
 var float  targetLevel = na
 var string exitReason  = ""
-var string lastPaType  = "—"
 
 candStopLong  = obBotBull - atrVal * obBufferAtr
 candStopShort = obTopBear + atrVal * obBufferAtr
@@ -162,8 +144,8 @@ candStopShort = obTopBear + atrVal * obBufferAtr
 touchBullOB = obActiveBull and low <= obTopBull and high >= obBotBull
 touchBearOB = obActiveBear and high >= obBotBear and low <= obTopBear
 
-longCond  = touchBullOB and bullPA and posDir != 1  and not na(candStopLong)  and (close - candStopLong)  > 0 and (close - candStopLong)  <= atrVal * maxStopAtrMult
-shortCond = touchBearOB and bearPA and posDir != -1 and not na(candStopShort) and (candStopShort - close) > 0 and (candStopShort - close) <= atrVal * maxStopAtrMult
+longCond  = touchBullOB and posDir != 1  and not na(candStopLong)  and (close - candStopLong)  > 0 and (close - candStopLong)  <= atrVal * maxStopAtrMult
+shortCond = touchBearOB and posDir != -1 and not na(candStopShort) and (candStopShort - close) > 0 and (candStopShort - close) <= atrVal * maxStopAtrMult
 
 hitStopLong    = posDir == 1  and low  <= stopLevel
 hitTargetLong  = posDir == 1  and high >= targetLevel
@@ -179,7 +161,6 @@ if longCond
     stopLevel := candStopLong
     targetLevel := entryPrice + (entryPrice - stopLevel) * rrRatio
     obActiveBull := false
-    lastPaType := bullEngulf ? "Bullish Engulfing" : "Bullish Pin Bar"
 
 if shortCond
     posDir := -1
@@ -187,7 +168,6 @@ if shortCond
     stopLevel := candStopShort
     targetLevel := entryPrice - (stopLevel - entryPrice) * rrRatio
     obActiveBear := false
-    lastPaType := bearEngulf ? "Bearish Engulfing" : "Bearish Pin Bar"
 
 if exitLong
     exitReason := hitTargetLong ? "TP" : hitStopLong ? "SL" : "CHoCH"
@@ -229,31 +209,31 @@ if showLevels
 tableSize = dashSize == "small" ? size.small : dashSize == "large" ? size.large : size.normal
 
 if showDashboard
-    var table dash = table.new(position.top_right, 2, 11, border_width=1)
+    var table dash = table.new(position.top_right, 2, 10, border_width=1)
 
     table.cell(dash, 0, 0, "Arbah Sniper V1", text_color=color.white, bgcolor=colHeader, text_size=tableSize, text_halign=text.align_left)
     table.cell(dash, 1, 0, syminfo.ticker, text_color=color.white, bgcolor=colHeader, text_size=tableSize)
 
     table.merge_cells(dash, 0, 1, 1, 1)
-    table.cell(dash, 0, 1, "Order Block + CHoCH + Price Action — Arbah Markets", text_color=colText, bgcolor=colPanelBg2, text_size=size.tiny, text_halign=text.align_center)
+    table.cell(dash, 0, 1, "Order Block + CHoCH — Arbah Markets", text_color=colText, bgcolor=colPanelBg2, text_size=size.tiny, text_halign=text.align_center)
 
     sigTxt = posDir == 1 ? "LONG ●" : posDir == -1 ? "SHORT ●" : "STANDBY"
     sigCol = posDir == 1 ? colBullish : posDir == -1 ? colBearish : colGrey
-    table.cell(dash, 0, 2, "التوصية", text_color=colText, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 0, 2, "Signal", text_color=colText, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
     table.cell(dash, 1, 2, sigTxt, text_color=sigCol, bgcolor=colPanelBg, text_size=tableSize)
 
-    trendTxt = structTrend > 0 ? "صاعد ▲" : structTrend < 0 ? "هابط ▼" : "محايد ●"
+    trendTxt = structTrend > 0 ? "Bullish ▲" : structTrend < 0 ? "Bearish ▼" : "Neutral ●"
     trendCol = structTrend > 0 ? colBullish : structTrend < 0 ? colBearish : colGrey
-    table.cell(dash, 0, 3, "الاتجاه العام", text_color=colText, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 0, 3, "Trend", text_color=colText, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
     table.cell(dash, 1, 3, trendTxt, text_color=trendCol, bgcolor=colPanelBg2, text_size=tableSize)
 
-    table.cell(dash, 0, 4, "نقطة الدخول", text_color=colText, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 0, 4, "Entry", text_color=colText, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
     table.cell(dash, 1, 4, posDir != 0 ? str.tostring(entryPrice, format.mintick) : "—", text_color=colText, bgcolor=colPanelBg, text_size=tableSize)
 
-    table.cell(dash, 0, 5, "وقف الخسارة", text_color=colText, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 0, 5, "Stop Loss", text_color=colText, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
     table.cell(dash, 1, 5, posDir != 0 ? str.tostring(stopLevel, format.mintick) : "—", text_color=colBearish, bgcolor=colPanelBg2, text_size=tableSize)
 
-    table.cell(dash, 0, 6, "الهدف", text_color=colText, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 0, 6, "Target", text_color=colText, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
     table.cell(dash, 1, 6, posDir != 0 ? str.tostring(targetLevel, format.mintick) : "—", text_color=colBullish, bgcolor=colPanelBg, text_size=tableSize)
 
     table.cell(dash, 0, 7, "R:R", text_color=colText, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
@@ -261,14 +241,11 @@ if showDashboard
 
     obTxt = obActiveBull and obActiveBear ? "BULL + BEAR" : obActiveBull ? "BULL OB ACTIVE" : obActiveBear ? "BEAR OB ACTIVE" : "NONE"
     obCol = obActiveBull ? colBullish : obActiveBear ? colBearish : colGrey
-    table.cell(dash, 0, 8, "الأوردر بلوك", text_color=colText, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 0, 8, "Order Block", text_color=colText, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
     table.cell(dash, 1, 8, obTxt, text_color=obCol, bgcolor=colPanelBg, text_size=tableSize)
 
-    table.cell(dash, 0, 9, "تأكيد البرايس أكشن", text_color=colText, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
-    table.cell(dash, 1, 9, lastPaType, text_color=colHeader, bgcolor=colPanelBg2, text_size=tableSize)
-
-    table.cell(dash, 0, 10, "Lot Size", text_color=colText, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
-    table.cell(dash, 1, 10, lotSizeTxt, text_color=colHeader, bgcolor=colPanelBg, text_size=tableSize)
+    table.cell(dash, 0, 9, "Lot Size", text_color=colText, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 9, lotSizeTxt, text_color=colHeader, bgcolor=colPanelBg2, text_size=tableSize)
 
 // ============================== ALERTS =================================
 alertcondition(longCond, title="Arbah Sniper Buy", message="Arbah Sniper V1: BUY {{ticker}} @ {{close}}")
