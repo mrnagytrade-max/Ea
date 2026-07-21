@@ -142,11 +142,12 @@ if obActiveBear and (close > obTopBear or (bar_index - obBarBear) > obMaxAge)
     box.delete(obBoxBear)
 
 // ============================== SIGNAL ENGINE =================================
-var int    posDir      = 0
-var float  entryPrice  = na
-var float  stopLevel   = na
-var float  targetLevel = na
-var string exitReason  = ""
+var int    posDir           = 0
+var float  entryPrice       = na
+var float  stopLevel        = na
+var float  targetLevel      = na
+var string exitReason       = ""
+var label  activeTradeLabel = na
 
 candStopLong  = obBotBull - atrVal * obBufferAtr
 candStopShort = obTopBear + atrVal * obBufferAtr
@@ -168,12 +169,34 @@ hitTargetShort = posDir == -1 and low  <= targetLevel
 exitLong  = posDir == 1  and (hitStopLong or hitTargetLong or chochDown)
 exitShort = posDir == -1 and (hitStopShort or hitTargetShort or chochUp)
 
+// Exits are processed before new entries so a same-bar exit always tags the
+// label of the trade that's actually closing, never a brand-new one.
+if exitLong
+    exitReason := hitTargetLong ? "TP" : hitStopLong ? "SL" : "CHoCH"
+    if not na(activeTradeLabel)
+        outcomeTxt = hitTargetLong ? "\n✅ TARGET HIT" : hitStopLong ? "\n❌ STOP HIT" : "\n⚠️ CLOSED (CHoCH)"
+        outcomeCol = hitTargetLong ? colBullish : hitStopLong ? colBearish : colGrey
+        label.set_text(activeTradeLabel, label.get_text(activeTradeLabel) + outcomeTxt)
+        label.set_color(activeTradeLabel, color.new(outcomeCol, 10))
+    posDir := 0
+
+if exitShort
+    exitReason := hitTargetShort ? "TP" : hitStopShort ? "SL" : "CHoCH"
+    if not na(activeTradeLabel)
+        outcomeTxt = hitTargetShort ? "\n✅ TARGET HIT" : hitStopShort ? "\n❌ STOP HIT" : "\n⚠️ CLOSED (CHoCH)"
+        outcomeCol = hitTargetShort ? colBullish : hitStopShort ? colBearish : colGrey
+        label.set_text(activeTradeLabel, label.get_text(activeTradeLabel) + outcomeTxt)
+        label.set_color(activeTradeLabel, color.new(outcomeCol, 10))
+    posDir := 0
+
 if longCond
     posDir := 1
     entryPrice := close
     stopLevel := candStopLong
     targetLevel := entryPrice + (entryPrice - stopLevel) * rrRatio
     obActiveBull := false
+    longTxt = "▲ BUY\nEntry: " + str.tostring(entryPrice, format.mintick) + "\nSL: " + str.tostring(stopLevel, format.mintick) + "   TP: " + str.tostring(targetLevel, format.mintick)
+    activeTradeLabel := label.new(bar_index, low - atrVal * 0.6, longTxt, style=label.style_label_up, color=color.new(colBullish, 15), textcolor=color.white, size=size.small)
 
 if shortCond
     posDir := -1
@@ -181,26 +204,12 @@ if shortCond
     stopLevel := candStopShort
     targetLevel := entryPrice - (stopLevel - entryPrice) * rrRatio
     obActiveBear := false
-
-if exitLong
-    exitReason := hitTargetLong ? "TP" : hitStopLong ? "SL" : "CHoCH"
-    posDir := 0
-
-if exitShort
-    exitReason := hitTargetShort ? "TP" : hitStopShort ? "SL" : "CHoCH"
-    posDir := 0
+    shortTxt = "▼ SELL\nEntry: " + str.tostring(entryPrice, format.mintick) + "\nSL: " + str.tostring(stopLevel, format.mintick) + "   TP: " + str.tostring(targetLevel, format.mintick)
+    activeTradeLabel := label.new(bar_index, high + atrVal * 0.6, shortTxt, style=label.style_label_down, color=color.new(colBearish, 15), textcolor=color.white, size=size.small)
 
 lotSizeTxt = str.tostring(lotCapitalUnit, "#") + "$ - " + str.tostring(lotPerUnit, "#.##") + " Lot"
 
-// ============================== PLOTTING — only Buy/Sell signals + their SL/TP =================================
-if longCond
-    longTxt = "▲ BUY\nEntry: " + str.tostring(entryPrice, format.mintick) + "\nSL: " + str.tostring(stopLevel, format.mintick) + "   TP: " + str.tostring(targetLevel, format.mintick)
-    label.new(bar_index, low - atrVal * 0.6, longTxt, style=label.style_label_up, color=color.new(colBullish, 15), textcolor=color.white, size=size.small)
-
-if shortCond
-    shortTxt = "▼ SELL\nEntry: " + str.tostring(entryPrice, format.mintick) + "\nSL: " + str.tostring(stopLevel, format.mintick) + "   TP: " + str.tostring(targetLevel, format.mintick)
-    label.new(bar_index, high + atrVal * 0.6, shortTxt, style=label.style_label_down, color=color.new(colBearish, 15), textcolor=color.white, size=size.small)
-
+// ============================== PLOTTING — SL/TP/Entry lines for the active signal =================================
 var line entryLine  = na
 var line stopLine   = na
 var line targetLine = na
