@@ -104,6 +104,12 @@ var bool  obActiveBear = false
 var box   obBoxBear    = na
 
 if chochUp
+    // A bullish CHoCH supersedes the market structure — any stale bearish
+    // Order Block from the previous (now-invalidated) downtrend no longer
+    // applies, so it's dropped immediately instead of staying tradeable.
+    if obActiveBear
+        obActiveBear := false
+        box.delete(obBoxBear)
     idxBull = findLastOppositeIdx(true, obLookback)
     if idxBull >= 0
         obTopBull := high[idxBull]
@@ -114,6 +120,10 @@ if chochUp
         obBoxBull := box.new(bar_index - idxBull, obTopBull, bar_index + obExtendBars, obBotBull, border_color=showObZones ? color.new(colObBull, 30) : color.new(colObBull, 100), bgcolor=showObZones ? color.new(colObBull, 85) : color.new(colObBull, 100), text=showObZones ? "OB" : "", text_size=size.tiny, text_color=showObZones ? colObBull : color.new(colObBull, 100))
 
 if chochDown
+    // Same logic in reverse: a bearish CHoCH invalidates any stale bullish OB.
+    if obActiveBull
+        obActiveBull := false
+        box.delete(obBoxBull)
     idxBear = findLastOppositeIdx(false, obLookback)
     if idxBear >= 0
         obTopBear := high[idxBear]
@@ -144,8 +154,11 @@ candStopShort = obTopBear + atrVal * obBufferAtr
 touchBullOB = obActiveBull and low <= obTopBull and high >= obBotBull
 touchBearOB = obActiveBear and high >= obBotBear and low <= obTopBear
 
-longCond  = touchBullOB and posDir != 1  and not na(candStopLong)  and (close - candStopLong)  > 0 and (close - candStopLong)  <= atrVal * maxStopAtrMult
-shortCond = touchBearOB and posDir != -1 and not na(candStopShort) and (candStopShort - close) > 0 and (candStopShort - close) <= atrVal * maxStopAtrMult
+// structTrend alignment is a belt-and-suspenders check — chochUp/chochDown
+// already clear the opposite-side OB above, but this guarantees a signal
+// never fires against the currently confirmed structure direction.
+longCond  = touchBullOB and structTrend >= 0 and posDir != 1  and not na(candStopLong)  and (close - candStopLong)  > 0 and (close - candStopLong)  <= atrVal * maxStopAtrMult
+shortCond = touchBearOB and structTrend <= 0 and posDir != -1 and not na(candStopShort) and (candStopShort - close) > 0 and (candStopShort - close) <= atrVal * maxStopAtrMult
 
 hitStopLong    = posDir == 1  and low  <= stopLevel
 hitTargetLong  = posDir == 1  and high >= targetLevel
