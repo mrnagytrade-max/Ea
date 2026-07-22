@@ -1,0 +1,202 @@
+//@version=6
+// ============================================================================
+//  Arbah SD  |  آرباه مناطق العرض والطلب
+//  Draws ONLY strong, unmitigated Supply & Demand zones — nothing else.
+//  Precision comes from three combined filters:
+//  1) A zone candidate is measured by how far price displaced away from the
+//     swing pivot that formed it, in ATR multiples — weak/noisy pivots
+//     never qualify as a zone at all (this is the main precision filter).
+//  2) A max-active-zones cap per side + overlap suppression stops zones
+//     from ever stacking up on the chart.
+//  3) A zone is deleted the instant price closes back through it
+//     (mitigated), so only live, still-relevant zones stay visible.
+//  Each zone is star-rated (⭐/⭐⭐/⭐⭐⭐) by displacement strength.
+//  Dashboard adds session, trend, volume, and an approximate liquidity read.
+// ============================================================================
+indicator("Arbah SD", shorttitle="ArbahSD", overlay=true, max_labels_count=500, max_boxes_count=500)
+
+// ============================== INPUTS =====================================
+grpZone = "🟩 مناطق العرض والطلب — Supply & Demand Zones"
+zoneSwingLen       = input.int(5, "طول السوينج (اكتشاف القمم/القيعان)", minval=2, group=grpZone)
+strongZoneMult     = input.float(2.0, "أقل قوة اندفاع لاعتماد المنطقة (× ATR)", step=0.1, minval=0.5, group=grpZone, tooltip="أهم فلتر للدقة — المناطق اللي اندفاعها أضعف من كذا × ATR بيتم تجاهلها تمامًا ومتترسمش خالص")
+maxZonesPerSide    = input.int(2, "أقصى عدد مناطق نشطة لكل اتجاه", minval=1, maxval=6, group=grpZone, tooltip="بيخلي الشارت نظيف — بيفضل بس أقوى المناطق الحديثة")
+overlapSuppressPct = input.float(50, "تجاهل منطقة جديدة لو تداخلت مع موجودة بنسبة ≥ %", step=5, minval=0, maxval=100, group=grpZone)
+zoneMaxAge         = input.int(200, "أقصى عمر للمنطقة بالشموع (0 = بلا حد)", minval=0, group=grpZone)
+showZoneText       = input.bool(true, "إظهار النوع وتقييم القوة (⭐) داخل المنطقة", group=grpZone)
+
+grpVol = "📊 الحجم والسيولة — Volume & Liquidity"
+atrLen               = input.int(14, "فترة ATR", group=grpVol)
+volLen               = input.int(20, "متوسط الحجم", group=grpVol)
+volMult              = input.float(1.2, "معامل اعتبار الحجم مرتفع", step=0.1, minval=0.5, group=grpVol)
+rangeLen             = input.int(20, "متوسط مدى الشمعة (للسيولة)", minval=2, group=grpVol)
+liquidityVolThresh   = input.float(1.2, "أقل نسبة حجم لاعتبار السيولة قوية", step=0.1, minval=0.5, group=grpVol)
+liquidityRangeThresh = input.float(1.1, "أقل نسبة مدى شمعة لاعتبار السيولة قوية", step=0.1, minval=0.5, group=grpVol, tooltip="السيولة القوية تقريبيًا = حجم أعلى من المتوسط + مدى حركة أوسع من المتوسط في نفس الوقت — تقريب إحصائي وليس بيانات عمق سوق حقيقية")
+
+grpTrend = "🧭 الاتجاه والجلسات — Trend & Sessions"
+ctxLen     = input.int(20, "فترة EMA لتحديد الاتجاه العام", minval=2, group=grpTrend)
+asiaSess   = input.session("0000-0900", "جلسة آسيا", group=grpTrend)
+londonSess = input.session("0700-1600", "جلسة لندن", group=grpTrend)
+nySess     = input.session("1200-2100", "جلسة نيويورك", group=grpTrend)
+sessTz     = input.string("UTC", "المنطقة الزمنية", group=grpTrend)
+
+grpStyle = "🎨 التصميم — Style"
+showDashboard = input.bool(true, "إظهار لوحة المعلومات", group=grpStyle)
+dashSize      = input.string("normal", "حجم اللوحة", options=["small", "normal", "large"], group=grpStyle)
+
+// ============================== PALETTE =====================================
+colPanelBg  = #0D1321
+colPanelBg2 = #131B2E
+colGold     = #D4AF37
+colGoldSoft = #F5D06F
+colBullish  = #00E396
+colBearish  = #FF4560
+colGrey     = #7F8FA6
+
+// ============================== CORE CALCULATIONS =================================
+atrVal = ta.atr(atrLen)
+
+ctxEma    = ta.ema(close, ctxLen)
+trendUp   = close > ctxEma
+trendDown = close < ctxEma
+
+volSma   = ta.sma(volume, volLen)
+volRatio = volume / volSma
+volHigh  = volRatio > volMult
+
+rangeSma   = ta.sma(high - low, rangeLen)
+rangeRatio = (high - low) / rangeSma
+
+strongLiquidity = volRatio >= liquidityVolThresh and rangeRatio >= liquidityRangeThresh
+
+inAsia   = not na(time(timeframe.period, asiaSess, sessTz))
+inLondon = not na(time(timeframe.period, londonSess, sessTz))
+inNY     = not na(time(timeframe.period, nySess, sessTz))
+sessionName = inAsia ? "ASIA" : inLondon ? "LONDON" : inNY ? "NEW YORK" : "OFF-HOURS"
+
+// ============================== ZONE ENGINE =================================
+type Zone
+    float top
+    float bot
+    int   barIdx
+    int   strength
+    box   b
+
+var array<Zone> demandZones = array.new<Zone>()
+var array<Zone> supplyZones = array.new<Zone>()
+
+overlapPct(top1, bot1, top2, bot2) =>
+    ovTop = math.min(top1, top2)
+    ovBot = math.max(bot1, bot2)
+    ovRange = math.max(ovTop - ovBot, 0.0)
+    range1 = top1 - bot1
+    range1 <= 0 ? 0.0 : ovRange / range1 * 100.0
+
+hasOverlap(arr, top, bot, thresholdPct) =>
+    found = false
+    if array.size(arr) > 0
+        for i = 0 to array.size(arr) - 1
+            z = array.get(arr, i)
+            if overlapPct(top, bot, z.top, z.bot) >= thresholdPct
+                found := true
+    found
+
+addZone(bullish, top, bot, barIdx, strength) =>
+    arr = bullish ? demandZones : supplyZones
+    created = false
+    if not hasOverlap(arr, top, bot, overlapSuppressPct)
+        zoneCol = bullish ? colBullish : colBearish
+        starsTxt = strength == 3 ? "⭐⭐⭐" : strength == 2 ? "⭐⭐" : "⭐"
+        labelTxt = (bullish ? "Demand " : "Supply ") + starsTxt
+        newBox = box.new(barIdx, top, bar_index, bot, border_color=color.new(zoneCol, 30), bgcolor=color.new(zoneCol, 85), border_width=1, text=showZoneText ? labelTxt : "", text_size=size.tiny, text_color=color.new(zoneCol, 0))
+        newZone = Zone.new(top, bot, barIdx, strength, newBox)
+        array.unshift(arr, newZone)
+        if array.size(arr) > maxZonesPerSide
+            oldest = array.pop(arr)
+            box.delete(oldest.b)
+        created := true
+    created
+
+// ---- Mitigation cleanup (runs every bar, keeps only live zones) ----
+if array.size(demandZones) > 0
+    for i = array.size(demandZones) - 1 to 0
+        z = array.get(demandZones, i)
+        mitigated = close < z.bot
+        aged = zoneMaxAge > 0 and (bar_index - z.barIdx) > zoneMaxAge
+        if mitigated or aged
+            box.delete(z.b)
+            array.remove(demandZones, i)
+        else
+            box.set_right(z.b, bar_index)
+
+if array.size(supplyZones) > 0
+    for i = array.size(supplyZones) - 1 to 0
+        z = array.get(supplyZones, i)
+        mitigated = close > z.top
+        aged = zoneMaxAge > 0 and (bar_index - z.barIdx) > zoneMaxAge
+        if mitigated or aged
+            box.delete(z.b)
+            array.remove(supplyZones, i)
+        else
+            box.set_right(z.b, bar_index)
+
+// ---- New zone candidates: swing pivot + displacement strength ----
+zonePivLow  = ta.pivotlow(zoneSwingLen, zoneSwingLen)
+zonePivHigh = ta.pivothigh(zoneSwingLen, zoneSwingLen)
+
+demandCreated = false
+supplyCreated = false
+
+if not na(zonePivLow)
+    zBarIdx = bar_index - zoneSwingLen
+    zTop = high[zoneSwingLen]
+    zBot = low[zoneSwingLen]
+    zDisp = (close - zonePivLow) / atrVal
+    if zDisp >= strongZoneMult
+        strength = zDisp >= strongZoneMult * 2 ? 3 : zDisp >= strongZoneMult * 1.5 ? 2 : 1
+        demandCreated := addZone(true, zTop, zBot, zBarIdx, strength)
+
+if not na(zonePivHigh)
+    zBarIdx = bar_index - zoneSwingLen
+    zTop = high[zoneSwingLen]
+    zBot = low[zoneSwingLen]
+    zDisp = (zonePivHigh - close) / atrVal
+    if zDisp >= strongZoneMult
+        strength = zDisp >= strongZoneMult * 2 ? 3 : zDisp >= strongZoneMult * 1.5 ? 2 : 1
+        supplyCreated := addZone(false, zTop, zBot, zBarIdx, strength)
+
+// ============================== DASHBOARD =================================
+tableSize = dashSize == "small" ? size.small : dashSize == "large" ? size.large : size.normal
+
+if showDashboard
+    var table dash = table.new(position.top_right, 2, 8, border_width=1)
+
+    table.cell(dash, 0, 0, "Arbah SD", text_color=colGoldSoft, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 0, syminfo.ticker, text_color=color.white, bgcolor=colPanelBg, text_size=tableSize)
+
+    table.merge_cells(dash, 0, 1, 1, 1)
+    table.cell(dash, 0, 1, "Strong Supply & Demand Zones — Arbah Markets", text_color=colGold, bgcolor=colPanelBg2, text_size=size.tiny, text_halign=text.align_center)
+
+    table.cell(dash, 0, 2, "Session", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 2, sessionName, text_color=colGold, bgcolor=colPanelBg, text_size=tableSize)
+
+    trendTxt = trendUp ? "Bullish ▲" : trendDown ? "Bearish ▼" : "Neutral ●"
+    trendCol = trendUp ? colBullish : trendDown ? colBearish : colGrey
+    table.cell(dash, 0, 3, "Trend (this TF)", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 3, trendTxt, text_color=trendCol, bgcolor=colPanelBg2, text_size=tableSize)
+
+    volTxt = (volHigh ? "High ▲  " : "Low ▼  ") + str.tostring(volRatio, "#.##") + "x"
+    table.cell(dash, 0, 4, "Volume", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 4, volTxt, text_color=volHigh ? colGold : colGrey, bgcolor=colPanelBg, text_size=tableSize)
+
+    table.cell(dash, 0, 5, "Liquidity", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 5, strongLiquidity ? "Strong ✓" : "Weak / Normal", text_color=strongLiquidity ? colBullish : colGrey, bgcolor=colPanelBg2, text_size=tableSize)
+
+    table.cell(dash, 0, 6, "Demand Zones", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 6, str.tostring(array.size(demandZones)), text_color=colBullish, bgcolor=colPanelBg, text_size=tableSize)
+
+    table.cell(dash, 0, 7, "Supply Zones", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 7, str.tostring(array.size(supplyZones)), text_color=colBearish, bgcolor=colPanelBg2, text_size=tableSize)
+
+// ============================== ALERTS =================================
+alertcondition(demandCreated, title="New Strong Demand Zone", message="Arbah SD: New Strong Demand Zone on {{ticker}}")
+alertcondition(supplyCreated, title="New Strong Supply Zone", message="Arbah SD: New Strong Supply Zone on {{ticker}}")
