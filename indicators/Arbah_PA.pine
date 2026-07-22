@@ -1,0 +1,177 @@
+//@version=6
+// ============================================================================
+//  Arbah PA  |  آرباه برايس أكشن
+//  Scans every bar for the 10 most famous, reliable candlestick / price
+//  action patterns (bullish and bearish variants of each) and fires a
+//  labeled Buy/Sell signal the moment one appears:
+//    1) Pin Bar (Hammer / Shooting Star)      6) Harami
+//    2) Engulfing                             7) Tweezer Top/Bottom
+//    3) Inside Bar Breakout                   8) 3 White Soldiers / 3 Black Crows
+//    4) Doji Reversal                         9) Marubozu
+//    5) Morning Star / Evening Star           10) Outside Bar (Key Reversal)
+//  Reversal-type patterns are also checked against a short-term trend
+//  context (price vs. an EMA) so a "bullish" pattern only counts after a
+//  downtrend and a "bearish" one only after an uptrend — this is what
+//  keeps the signals accurate instead of firing on random noise.
+// ============================================================================
+indicator("Arbah PA", shorttitle="ArbahPA", overlay=true, max_labels_count=500)
+
+// ============================== INPUTS =====================================
+grpCtx = "🧭 السياق العام — Trend Context"
+useContextFilter = input.bool(true, "اشتراط توافق الاتجاه العام مع النموذج (للنماذج الانعكاسية)", group=grpCtx, tooltip="نموذج صعودي (زي Hammer) ميتحسبش إلا لو كان في اتجاه هابط قبله، والعكس للنماذج الهابطة — بيرفع دقة الإشارات")
+ctxLen = input.int(20, "فترة EMA لتحديد الاتجاه السابق", minval=2, group=grpCtx)
+
+grpPat = "🕯️ إعدادات النماذج — Pattern Settings"
+avgLen           = input.int(14, "فترة متوسط حجم الشمعة (للمقارنة)", minval=2, group=grpPat)
+atrLen           = input.int(14, "فترة ATR", group=grpPat)
+pinBarMult       = input.float(2.0, "Pin Bar: أقل نسبة فتيل/جسم", step=0.1, minval=1.0, group=grpPat)
+dojiBodyPct      = input.float(0.1, "Doji: أقصى نسبة جسم من مدى الشمعة", step=0.01, minval=0.01, maxval=0.5, group=grpPat)
+marubozuWickPct  = input.float(0.1, "Marubozu: أقصى نسبة فتيل من مدى الشمعة", step=0.01, minval=0, maxval=0.5, group=grpPat)
+tweezerTolAtr    = input.float(0.15, "Tweezer: أقصى فرق بين القمتين/القاعين (× ATR)", step=0.05, minval=0.01, group=grpPat)
+
+grpVol = "📊 الحجم و الجلسات — Volume & Sessions"
+volLen     = input.int(20, "متوسط الحجم", group=grpVol)
+volMult    = input.float(1.2, "معامل اعتبار الحجم مرتفع", step=0.1, minval=0.5, group=grpVol)
+asiaSess   = input.session("0000-0900", "جلسة آسيا", group=grpVol)
+londonSess = input.session("0700-1600", "جلسة لندن", group=grpVol)
+nySess     = input.session("1200-2100", "جلسة نيويورك", group=grpVol)
+sessTz     = input.string("UTC", "المنطقة الزمنية", group=grpVol)
+
+grpStyle = "🎨 التصميم — Style"
+showDashboard = input.bool(true, "إظهار لوحة المعلومات", group=grpStyle)
+dashSize      = input.string("normal", "حجم اللوحة", options=["small", "normal", "large"], group=grpStyle)
+showLabels    = input.bool(true, "رسم إشارات الشراء/البيع على الشارت", group=grpStyle)
+
+// ============================== PALETTE =====================================
+colPanelBg  = #0D1321
+colPanelBg2 = #131B2E
+colGold     = #D4AF37
+colGoldSoft = #F5D06F
+colBullish  = #00E396
+colBearish  = #FF4560
+colGrey     = #7F8FA6
+
+// ============================== CORE CALCULATIONS =================================
+atrVal = ta.atr(atrLen)
+
+bodySize   = math.abs(close - open)
+totalRange = high - low
+upperWick  = high - math.max(close, open)
+lowerWick  = math.min(close, open) - low
+
+avgBody  = ta.sma(math.abs(close - open), avgLen)
+avgRange = ta.sma(high - low, avgLen)
+
+ctxEma  = ta.ema(close, ctxLen)
+bullCtx = not useContextFilter or close < ctxEma
+bearCtx = not useContextFilter or close > ctxEma
+
+// ============================== SESSIONS (dashboard only) =================================
+inAsia   = not na(time(timeframe.period, asiaSess, sessTz))
+inLondon = not na(time(timeframe.period, londonSess, sessTz))
+inNY     = not na(time(timeframe.period, nySess, sessTz))
+sessionName = inAsia ? "ASIA" : inLondon ? "LONDON" : inNY ? "NEW YORK" : "OFF-HOURS"
+
+// ============================== VOLUME =================================
+volSma  = ta.sma(volume, volLen)
+volHigh = volume > volSma * volMult
+
+// ============================== TREND (dashboard) =================================
+trendUp   = close > ctxEma
+trendDown = close < ctxEma
+
+// ============================== PATTERN 1 — PIN BAR (Hammer / Shooting Star) =================================
+bullPinBar = bodySize > 0 and lowerWick >= bodySize * pinBarMult and upperWick <= bodySize * 0.5 and bullCtx
+bearPinBar = bodySize > 0 and upperWick >= bodySize * pinBarMult and lowerWick <= bodySize * 0.5 and bearCtx
+
+// ============================== PATTERN 2 — ENGULFING =================================
+bullEngulf = close > open and close[1] < open[1] and close >= open[1] and open <= close[1] and bullCtx
+bearEngulf = close < open and close[1] > open[1] and close <= open[1] and open >= close[1] and bearCtx
+
+// ============================== PATTERN 3 — INSIDE BAR BREAKOUT =================================
+insideBar        = high[1] < high[2] and low[1] > low[2]
+bullInsideBreak = insideBar and close > high[2]
+bearInsideBreak = insideBar and close < low[2]
+
+// ============================== PATTERN 4 — DOJI REVERSAL =================================
+isDojiBody = bodySize <= totalRange * dojiBodyPct
+bullDoji = isDojiBody and lowerWick > totalRange * 0.6 and bullCtx
+bearDoji = isDojiBody and upperWick > totalRange * 0.6 and bearCtx
+
+// ============================== PATTERN 5 — MORNING STAR / EVENING STAR =================================
+morningStar = close[2] < open[2] and math.abs(close[2] - open[2]) > avgBody[2] and math.abs(close[1] - open[1]) < avgBody[1] * 0.5 and close > open and math.abs(close - open) > avgBody * 0.8 and close > (open[2] + close[2]) / 2
+eveningStar = close[2] > open[2] and math.abs(close[2] - open[2]) > avgBody[2] and math.abs(close[1] - open[1]) < avgBody[1] * 0.5 and close < open and math.abs(close - open) > avgBody * 0.8 and close < (open[2] + close[2]) / 2
+
+// ============================== PATTERN 6 — HARAMI =================================
+bullHarami = close[1] < open[1] and math.abs(close[1] - open[1]) > avgBody[1] and close > open and open >= close[1] and close <= open[1] and bullCtx
+bearHarami = close[1] > open[1] and math.abs(close[1] - open[1]) > avgBody[1] and close < open and open <= close[1] and close >= open[1] and bearCtx
+
+// ============================== PATTERN 7 — TWEEZER TOP/BOTTOM =================================
+tweezerBottom = math.abs(low - low[1]) <= atrVal * tweezerTolAtr and close[1] < open[1] and close > open and bullCtx
+tweezerTop    = math.abs(high - high[1]) <= atrVal * tweezerTolAtr and close[1] > open[1] and close < open and bearCtx
+
+// ============================== PATTERN 8 — 3 WHITE SOLDIERS / 3 BLACK CROWS =================================
+threeWhiteSoldiers = close > open and close[1] > open[1] and close[2] > open[2] and close > close[1] and close[1] > close[2] and open > open[1] and open[1] > open[2] and math.abs(close - open) > avgBody * 0.6 and math.abs(close[1] - open[1]) > avgBody[1] * 0.6 and math.abs(close[2] - open[2]) > avgBody[2] * 0.6
+threeBlackCrows    = close < open and close[1] < open[1] and close[2] < open[2] and close < close[1] and close[1] < close[2] and open < open[1] and open[1] < open[2] and math.abs(close - open) > avgBody * 0.6 and math.abs(close[1] - open[1]) > avgBody[1] * 0.6 and math.abs(close[2] - open[2]) > avgBody[2] * 0.6
+
+// ============================== PATTERN 9 — MARUBOZU =================================
+bullMarubozu = close > open and upperWick <= totalRange * marubozuWickPct and lowerWick <= totalRange * marubozuWickPct and bodySize >= avgBody * 1.2
+bearMarubozu = close < open and upperWick <= totalRange * marubozuWickPct and lowerWick <= totalRange * marubozuWickPct and bodySize >= avgBody * 1.2
+
+// ============================== PATTERN 10 — OUTSIDE BAR (Key Reversal) =================================
+outsideBar   = high > high[1] and low < low[1]
+bullOutside = outsideBar and close > open and close > high[1] and bullCtx
+bearOutside = outsideBar and close < open and close < low[1] and bearCtx
+
+// ============================== SIGNAL SELECTION (one label per bar per side) =================================
+bullPatternName = morningStar ? "Morning Star" : threeWhiteSoldiers ? "3 White Soldiers" : bullEngulf ? "Bullish Engulfing" : bullOutside ? "Outside Bar" : tweezerBottom ? "Tweezer Bottom" : bullHarami ? "Bullish Harami" : bullPinBar ? "Bullish Pin Bar (Hammer)" : bullMarubozu ? "Bullish Marubozu" : bullInsideBreak ? "Inside Bar Breakout" : bullDoji ? "Bullish Doji" : na
+
+bearPatternName = eveningStar ? "Evening Star" : threeBlackCrows ? "3 Black Crows" : bearEngulf ? "Bearish Engulfing" : bearOutside ? "Outside Bar" : tweezerTop ? "Tweezer Top" : bearHarami ? "Bearish Harami" : bearPinBar ? "Bearish Pin Bar (Shooting Star)" : bearMarubozu ? "Bearish Marubozu" : bearInsideBreak ? "Inside Bar Breakout" : bearDoji ? "Bearish Doji" : na
+
+bullSignal = not na(bullPatternName)
+bearSignal = not na(bearPatternName)
+
+var string lastPattern = "—"
+if bullSignal
+    lastPattern := "▲ " + bullPatternName
+if bearSignal
+    lastPattern := "▼ " + bearPatternName
+
+// ============================== PLOTTING =================================
+if showLabels and bullSignal
+    label.new(bar_index, low - atrVal * 0.5, "▲ BUY\n" + bullPatternName, style=label.style_label_up, color=color.new(colBullish, 15), textcolor=color.white, size=size.small)
+
+if showLabels and bearSignal
+    label.new(bar_index, high + atrVal * 0.5, "▼ SELL\n" + bearPatternName, style=label.style_label_down, color=color.new(colBearish, 15), textcolor=color.white, size=size.small)
+
+// ============================== DASHBOARD =================================
+tableSize = dashSize == "small" ? size.small : dashSize == "large" ? size.large : size.normal
+
+if showDashboard
+    var table dash = table.new(position.top_right, 2, 6, border_width=1)
+
+    table.cell(dash, 0, 0, "Arbah PA", text_color=colGoldSoft, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 0, syminfo.ticker, text_color=color.white, bgcolor=colPanelBg, text_size=tableSize)
+
+    table.merge_cells(dash, 0, 1, 1, 1)
+    table.cell(dash, 0, 1, "Top-10 Price Action Patterns — Arbah Markets", text_color=colGold, bgcolor=colPanelBg2, text_size=size.tiny, text_halign=text.align_center)
+
+    table.cell(dash, 0, 2, "Session", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 2, sessionName, text_color=colGold, bgcolor=colPanelBg, text_size=tableSize)
+
+    trendTxt = trendUp ? "Bullish ▲" : trendDown ? "Bearish ▼" : "Neutral ●"
+    trendCol = trendUp ? colBullish : trendDown ? colBearish : colGrey
+    table.cell(dash, 0, 3, "Trend (this TF)", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 3, trendTxt, text_color=trendCol, bgcolor=colPanelBg2, text_size=tableSize)
+
+    volTxt = (volHigh ? "High ▲  " : "Low ▼  ") + str.tostring(volume / volSma, "#.##") + "x"
+    table.cell(dash, 0, 4, "Volume", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 4, volTxt, text_color=volHigh ? colGold : colGrey, bgcolor=colPanelBg, text_size=tableSize)
+
+    lastCol = str.startswith(lastPattern, "▲") ? colBullish : str.startswith(lastPattern, "▼") ? colBearish : colGrey
+    table.cell(dash, 0, 5, "Last Pattern", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 5, lastPattern, text_color=lastCol, bgcolor=colPanelBg2, text_size=tableSize)
+
+// ============================== ALERTS =================================
+alertcondition(bullSignal, title="Arbah PA Buy", message="Arbah PA: BUY {{ticker}} @ {{close}}")
+alertcondition(bearSignal, title="Arbah PA Sell", message="Arbah PA: SELL {{ticker}} @ {{close}}")
