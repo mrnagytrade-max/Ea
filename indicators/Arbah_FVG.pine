@@ -1,0 +1,273 @@
+//@version=6
+// ============================================================================
+//  Arbah FVG  |  مؤشر الفجوات السعرية القوية والمؤكدة — Created By Arbah Markets
+//  Detects only Fair Value Gaps born from a decisive displacement candle with
+//  a meaningful size (ATR-based), tiers them Strong 🔥 / Confirmed 💎, tracks
+//  live mitigation, and ships an ICT-style dashboard: current session, current
+//  general trend (HTF bias + market structure), and current liquidity state
+//  (buy-side / sell-side liquidity, sweeps).
+// ============================================================================
+indicator("Arbah FVG | فجوات السعر القوية والمؤكدة", shorttitle="Arbah FVG", overlay=true, max_boxes_count=500, max_lines_count=200, max_labels_count=200)
+
+// ============================== INPUTS =====================================
+grpFvg = "🌀 الفجوات السعرية — Fair Value Gaps"
+fvgAtrLen     = input.int(14, "فترة ATR", minval=1, group=grpFvg)
+fvgMinAtr     = input.float(0.35, "أدنى حجم للفجوة عشان تتسجل أصلاً (× ATR)", step=0.05, minval=0, group=grpFvg, tooltip="أي فجوة أصغر من كده بتتجاهل بالكامل ومش بتتسجل حتى كفجوة ضعيفة")
+fvgStrongAtr  = input.float(0.7, "حجم الفجوة لتصنيفها مؤكدة 💎 (× ATR)", step=0.05, minval=0, group=grpFvg)
+fvgBodyRatio  = input.float(0.55, "أقل نسبة جسم لشمعة الاندفاع", step=0.05, minval=0, maxval=1, group=grpFvg, tooltip="شمعة الاندفاع (الشمعة الوسطى في نموذج الفجوة) لازم يكون جسمها نسبة كبيرة من مداها عشان الفجوة تتصنّف قوية/مؤكدة بدل عشوائية")
+fvgRequireVol = input.bool(true, "اشتراط حجم تداول مرتفع لتصنيف 💎", group=grpFvg)
+fvgVolLen     = input.int(20, "متوسط الحجم", minval=1, group=grpFvg)
+fvgVolMult    = input.float(1.3, "معامل تأكيد الحجم", step=0.1, minval=0.5, group=grpFvg)
+fvgExtendBars = input.int(45, "امتداد الفجوة (عدد شموع)", minval=5, group=grpFvg)
+fvgMaxCount   = input.int(8, "أقصى عدد فجوات نشطة لكل نوع", minval=1, maxval=30, group=grpFvg)
+fvgMitigatePct = input.float(0.5, "نسبة الامتلاء لتعتيم المنطقة", step=0.05, minval=0.05, maxval=0.95, group=grpFvg, tooltip="لما السعر يرجع جوه الفجوة بالنسبة دي، هتتعتم كإشارة إضعاف قبل ما تتملى بالكامل")
+fvgShowWeak   = input.bool(false, "إظهار الفجوات الضعيفة (غير المؤكدة) بالرمادي", group=grpFvg)
+
+grpTrend = "📈 الاتجاه العام — General Trend"
+trendHtf       = input.timeframe("240", "الفريم الزمني الأعلى (HTF)", group=grpTrend, tooltip="بيحسب انحياز الاتجاه العام من فريم أعلى من الشارت الحالي")
+trendFastLen   = input.int(50, "EMA سريع (HTF)", minval=2, group=grpTrend)
+trendSlowLen   = input.int(200, "EMA بطيء (HTF)", minval=2, group=grpTrend)
+structSwingLen = input.int(5, "طول السوينج لهيكل السوق", minval=2, group=grpTrend, tooltip="الاتجاه العام بيتطلب توافق انحياز الفريم الأعلى مع هيكل السوق (BOS/CHoCH) على الشارت الحالي")
+
+grpLiq = "💧 السيولة — Liquidity"
+liqSwingLen    = input.int(10, "طول السوينج لمستويات السيولة", minval=2, group=grpLiq)
+liqRecentBars  = input.int(15, "عدد الشموع لاعتبار الاكتساح حديث", minval=1, group=grpLiq)
+showLiqOnChart = input.bool(false, "رسم مستويات السيولة (BSL/SSL) على الشارت", group=grpLiq)
+
+grpSession = "🕒 الجلسة — Trading Sessions"
+sessTz        = input.string("UTC", "المنطقة الزمنية", group=grpSession)
+asianSess     = input.session("0000-0900", "الجلسة الآسيوية", group=grpSession)
+londonSess    = input.session("0800-1700", "جلسة لندن", group=grpSession)
+nySess        = input.session("1300-2200", "جلسة نيويورك", group=grpSession)
+showSessionBg = input.bool(false, "تظليل خلفية الجلسة على الشارت", group=grpSession)
+
+grpStyle = "🎨 التصميم — Style"
+showDashboard = input.bool(true, "إظهار لوحة المعلومات", group=grpStyle)
+dashSize      = input.string("normal", "حجم لوحة المعلومات", options=["small", "normal", "large"], group=grpStyle)
+dashPos       = input.string("أعلى يمين", "موضع لوحة المعلومات", options=["أعلى يمين", "أعلى يسار", "أسفل يمين", "أسفل يسار"], group=grpStyle)
+
+// ============================== PALETTE =====================================
+colBullish  = #00E396
+colBearish  = #FF4560
+colGold     = #D4AF37
+colGoldSoft = #F5D06F
+colTeal     = #17C3B2
+colPanelBg  = #0D1321
+colPanelBg2 = #131B2E
+colGrey     = #7F8FA6
+
+// ============================== BASE CALCULATIONS =================================
+atrVal = ta.atr(fvgAtrLen)
+volSma = ta.sma(volume, fvgVolLen)
+
+// ============================== FAIR VALUE GAPS =================================
+// Classic 3-candle imbalance: candle A (index 2) / displacement candle B (index 1) /
+// candle C (index 0). A gap only "registers" once it clears the minimum ATR size; among
+// those, it's tiered Strong 🔥 / Confirmed 💎 based on the displacement candle's quality.
+type FvgZone
+    box   b
+    float top
+    float bot
+    int   dir
+    bool  premium
+    bool  weak
+
+var array<FvgZone> bullZones = array.new<FvgZone>()
+var array<FvgZone> bearZones = array.new<FvgZone>()
+
+bullFvgRaw = low > high[2] and (low - high[2]) > atrVal * fvgMinAtr
+bearFvgRaw = high < low[2] and (low[2] - high) > atrVal * fvgMinAtr
+
+dispBody      = math.abs(close[1] - open[1])
+dispRange     = high[1] - low[1]
+dispBodyRatio = dispRange == 0 ? 0.0 : dispBody / dispRange
+dispBullish   = close[1] > open[1]
+dispBearish   = close[1] < open[1]
+dispVolConfirm = volume[1] > volSma[1] * fvgVolMult
+
+bullGapAtr = (low - high[2]) / atrVal
+bearGapAtr = (low[2] - high) / atrVal
+
+bullConfirmed = bullFvgRaw and dispBullish and dispBodyRatio >= fvgBodyRatio
+bearConfirmed = bearFvgRaw and dispBearish and dispBodyRatio >= fvgBodyRatio
+
+bullPremium = bullConfirmed and bullGapAtr >= fvgStrongAtr and (not fvgRequireVol or dispVolConfirm)
+bearPremium = bearConfirmed and bearGapAtr >= fvgStrongAtr and (not fvgRequireVol or dispVolConfirm)
+
+if bullFvgRaw and (bullConfirmed or fvgShowWeak)
+    fTop = low
+    fBot = high[2]
+    isWeak = not bullConfirmed
+    borderCol = isWeak ? color.new(colGrey, 60) : bullPremium ? color.new(colBullish, 10) : color.new(colBullish, 35)
+    bgCol     = isWeak ? color.new(colGrey, 92) : bullPremium ? color.new(colBullish, 78) : color.new(colBullish, 85)
+    txtCol    = isWeak ? color.new(colGrey, 20) : color.new(colBullish, 0)
+    lblTxt    = isWeak ? "FVG" : bullPremium ? "FVG 💎" : "FVG 🔥"
+    bStyle    = bullPremium ? line.style_solid : line.style_dashed
+    newBox = box.new(bar_index - 2, fTop, bar_index + fvgExtendBars, fBot, border_color=borderCol, bgcolor=bgCol, border_width=bullPremium ? 2 : 1, border_style=bStyle, text=lblTxt, text_size=size.tiny, text_color=txtCol, text_halign=text.align_right, text_valign=text.align_top)
+    array.unshift(bullZones, FvgZone.new(newBox, fTop, fBot, 1, bullPremium, isWeak))
+    if array.size(bullZones) > fvgMaxCount
+        box.delete(array.pop(bullZones).b)
+
+if bearFvgRaw and (bearConfirmed or fvgShowWeak)
+    fTop = low[2]
+    fBot = high
+    isWeak = not bearConfirmed
+    borderCol = isWeak ? color.new(colGrey, 60) : bearPremium ? color.new(colBearish, 10) : color.new(colBearish, 35)
+    bgCol     = isWeak ? color.new(colGrey, 92) : bearPremium ? color.new(colBearish, 78) : color.new(colBearish, 85)
+    txtCol    = isWeak ? color.new(colGrey, 20) : color.new(colBearish, 0)
+    lblTxt    = isWeak ? "FVG" : bearPremium ? "FVG 💎" : "FVG 🔥"
+    bStyle    = bearPremium ? line.style_solid : line.style_dashed
+    newBox = box.new(bar_index - 2, fTop, bar_index + fvgExtendBars, fBot, border_color=borderCol, bgcolor=bgCol, border_width=bearPremium ? 2 : 1, border_style=bStyle, text=lblTxt, text_size=size.tiny, text_color=txtCol, text_halign=text.align_right, text_valign=text.align_bottom)
+    array.unshift(bearZones, FvgZone.new(newBox, fTop, fBot, -1, bearPremium, isWeak))
+    if array.size(bearZones) > fvgMaxCount
+        box.delete(array.pop(bearZones).b)
+
+// Live mitigation: fully filled zones grey out, stop extending and drop out of tracking;
+// zones filled past the configured threshold dim in place to flag a weakening area.
+if array.size(bullZones) > 0
+    for i = array.size(bullZones) - 1 to 0
+        z = array.get(bullZones, i)
+        if low <= z.bot
+            box.set_bgcolor(z.b, color.new(colGrey, 95))
+            box.set_border_color(z.b, color.new(colGrey, 80))
+            box.set_right(z.b, bar_index)
+            array.remove(bullZones, i)
+        else if low <= z.top
+            fillPct = (z.top - low) / (z.top - z.bot)
+            if fillPct >= fvgMitigatePct
+                box.set_bgcolor(z.b, color.new(colBullish, 93))
+                box.set_border_color(z.b, color.new(colBullish, 65))
+
+if array.size(bearZones) > 0
+    for i = array.size(bearZones) - 1 to 0
+        z = array.get(bearZones, i)
+        if high >= z.top
+            box.set_bgcolor(z.b, color.new(colGrey, 95))
+            box.set_border_color(z.b, color.new(colGrey, 80))
+            box.set_right(z.b, bar_index)
+            array.remove(bearZones, i)
+        else if high >= z.bot
+            fillPct = (high - z.bot) / (z.top - z.bot)
+            if fillPct >= fvgMitigatePct
+                box.set_bgcolor(z.b, color.new(colBearish, 93))
+                box.set_border_color(z.b, color.new(colBearish, 65))
+
+// ============================== LIQUIDITY (BSL / SSL) =================================
+// Recent swing high/low act as resting buy-side / sell-side liquidity pools. A sweep is a
+// wick through the level that closes back on the other side — the classic ICT liquidity grab.
+pivHighLiq = ta.pivothigh(liqSwingLen, liqSwingLen)
+pivLowLiq  = ta.pivotlow(liqSwingLen, liqSwingLen)
+
+var float bslLevel    = na
+var float sslLevel    = na
+var line  bslLine     = na
+var line  sslLine     = na
+var bool  bslSwept    = false
+var bool  sslSwept    = false
+var int   bslSweptBar = na
+var int   sslSweptBar = na
+
+if not na(pivHighLiq)
+    bslLevel := pivHighLiq
+    bslSwept := false
+    if showLiqOnChart
+        line.delete(bslLine)
+        bslLine := line.new(bar_index - liqSwingLen, bslLevel, bar_index + fvgExtendBars, bslLevel, color=color.new(colBearish, 30), style=line.style_dotted, width=1)
+
+if not na(pivLowLiq)
+    sslLevel := pivLowLiq
+    sslSwept := false
+    if showLiqOnChart
+        line.delete(sslLine)
+        sslLine := line.new(bar_index - liqSwingLen, sslLevel, bar_index + fvgExtendBars, sslLevel, color=color.new(colBullish, 30), style=line.style_dotted, width=1)
+
+sweepBSL = not na(bslLevel) and not bslSwept and high > bslLevel and close < bslLevel
+sweepSSL = not na(sslLevel) and not sslSwept and low  < sslLevel and close > sslLevel
+
+if sweepBSL
+    bslSwept    := true
+    bslSweptBar := bar_index
+
+if sweepSSL
+    sslSwept    := true
+    sslSweptBar := bar_index
+
+// ============================== GENERAL TREND (HTF bias + structure) =================================
+htfEmaFast = request.security(syminfo.tickerid, trendHtf, ta.ema(close, trendFastLen), lookahead=barmerge.lookahead_off)
+htfEmaSlow = request.security(syminfo.tickerid, trendHtf, ta.ema(close, trendSlowLen), lookahead=barmerge.lookahead_off)
+
+htfTrendUp   = htfEmaFast > htfEmaSlow
+htfTrendDown = htfEmaFast < htfEmaSlow
+
+var float lastSwingHigh = na
+var float lastSwingLow  = na
+var int   structTrend   = 0
+
+structPivHigh = ta.pivothigh(structSwingLen, structSwingLen)
+structPivLow  = ta.pivotlow(structSwingLen, structSwingLen)
+
+if not na(structPivHigh)
+    lastSwingHigh := structPivHigh
+if not na(structPivLow)
+    lastSwingLow := structPivLow
+
+if not na(lastSwingHigh) and ta.crossover(close, lastSwingHigh)
+    structTrend := 1
+if not na(lastSwingLow) and ta.crossunder(close, lastSwingLow)
+    structTrend := -1
+
+generalTrendUp   = htfTrendUp   and structTrend >= 0
+generalTrendDown = htfTrendDown and structTrend <= 0
+
+// ============================== SESSION =================================
+inSession(sess) => not na(time(timeframe.period, sess, sessTz))
+
+isAsian  = inSession(asianSess)
+isLondon = inSession(londonSess)
+isNY     = inSession(nySess)
+
+sessionTxt = isLondon and isNY ? "تداخل لندن/نيويورك 🌍" : isNY ? "نيويورك 🇺🇸" : isLondon ? "لندن 🇬🇧" : isAsian ? "آسيوية 🌏" : "خارج الجلسات الرئيسية ⏸"
+sessionCol = isLondon and isNY ? colGold : (isNY or isLondon or isAsian) ? colTeal : colGrey
+
+sessBg = isLondon and isNY ? color.new(colGold, 90) : isNY ? color.new(colTeal, 93) : isLondon ? color.new(colTeal, 95) : isAsian ? color.new(colGrey, 95) : na
+bgcolor(showSessionBg ? sessBg : na, title="خلفية الجلسة")
+
+// ============================== DASHBOARD =================================
+tableSize = dashSize == "small" ? size.small : dashSize == "large" ? size.large : size.normal
+tablePos  = dashPos == "أعلى يمين" ? position.top_right : dashPos == "أعلى يسار" ? position.top_left : dashPos == "أسفل يمين" ? position.bottom_right : position.bottom_left
+
+if showDashboard
+    var table dash = table.new(tablePos, 2, 7, border_width=1)
+
+    table.cell(dash, 0, 0, "Arbah FVG", text_color=colGoldSoft, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 0, syminfo.ticker, text_color=color.white, bgcolor=colPanelBg, text_size=tableSize)
+
+    table.merge_cells(dash, 0, 1, 1, 1)
+    table.cell(dash, 0, 1, "Created By Arbah Markets", text_color=colGold, bgcolor=colPanelBg2, text_size=size.tiny, text_halign=text.align_center)
+
+    table.cell(dash, 0, 2, "الجلسة الحالية", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 2, sessionTxt, text_color=sessionCol, bgcolor=colPanelBg, text_size=tableSize)
+
+    trendTxt = generalTrendUp ? "صاعد ▲" : generalTrendDown ? "هابط ▼" : "متذبذب ↔"
+    trendCol = generalTrendUp ? colBullish : generalTrendDown ? colBearish : colGrey
+    table.cell(dash, 0, 3, "الاتجاه العام", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 3, trendTxt, text_color=trendCol, bgcolor=colPanelBg2, text_size=tableSize)
+
+    recentBslSweep = not na(bslSweptBar) and (bar_index - bslSweptBar) <= liqRecentBars
+    recentSslSweep = not na(sslSweptBar) and (bar_index - sslSweptBar) <= liqRecentBars
+    liqTxt = recentSslSweep ? "اكتساح سيولة سفلية 🟢 (SSL)" : recentBslSweep ? "اكتساح سيولة علوية 🔴 (BSL)" : (not na(bslLevel) and not na(sslLevel)) ? (math.abs(close - bslLevel) < math.abs(close - sslLevel) ? "سيولة علوية نشطة فوق السعر (BSL)" : "سيولة سفلية نشطة أسفل السعر (SSL)") : "غير محددة"
+    liqCol = recentSslSweep ? colBullish : recentBslSweep ? colBearish : colGold
+    table.cell(dash, 0, 4, "السيولة الحالية", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 4, liqTxt, text_color=liqCol, bgcolor=colPanelBg, text_size=tableSize)
+
+    table.cell(dash, 0, 5, "فجوات صاعدة نشطة", text_color=color.white, bgcolor=colPanelBg2, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 5, str.tostring(array.size(bullZones)), text_color=colBullish, bgcolor=colPanelBg2, text_size=tableSize)
+
+    table.cell(dash, 0, 6, "فجوات هابطة نشطة", text_color=color.white, bgcolor=colPanelBg, text_size=tableSize, text_halign=text.align_left)
+    table.cell(dash, 1, 6, str.tostring(array.size(bearZones)), text_color=colBearish, bgcolor=colPanelBg, text_size=tableSize)
+
+// ============================== ALERTS =================================
+alertcondition(bullPremium, title="Arbah FVG - Confirmed Bullish FVG", message="Arbah FVG: فجوة صاعدة مؤكدة 💎 على {{ticker}} عند {{close}}")
+alertcondition(bearPremium, title="Arbah FVG - Confirmed Bearish FVG", message="Arbah FVG: فجوة هابطة مؤكدة 💎 على {{ticker}} عند {{close}}")
+alertcondition(sweepBSL, title="Arbah FVG - BSL Liquidity Sweep", message="Arbah FVG: اكتساح سيولة علوية BSL على {{ticker}} عند {{close}}")
+alertcondition(sweepSSL, title="Arbah FVG - SSL Liquidity Sweep", message="Arbah FVG: اكتساح سيولة سفلية SSL على {{ticker}} عند {{close}}")
