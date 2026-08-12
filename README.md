@@ -8,6 +8,7 @@
 |---|---|
 | `indicators/EGX_Premium_Signals.pine` | المؤشر الرئيسي: إشارات شراء/بيع + لوحة معلومات + خطوط وقف الخسارة والهدف + تنبيهات (Alerts) |
 | `strategies/EGX_Premium_Strategy.pine` | نسخة سابقة من محرك الإشارات (قبل التحول لمنطق الشريط اللوني) مربوطة بمحرك `strategy()` لاختبار الأداء التاريخي — لسه مفيدة للـ Backtest لكنها مش متزامنة 100% مع آخر تحديثات المؤشر، قولّي لو حابب أحدّثها |
+| `experts/Buy_Grid_Ladder_EA.mq5` | إكسبيرت (EA) لمنصة **MetaTrader 5**: شبكة أوامر معلقة Buy Stop / Buy Limit حوالين السعر تتجدد ذاتيًا — تفاصيل الاستخدام في [`experts/README.md`](experts/README.md) |
 
 ## منطق الاستراتيجية (Ribbon-Driven Signal Engine)
 
