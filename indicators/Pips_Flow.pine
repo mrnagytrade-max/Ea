@@ -1,0 +1,566 @@
+//@version=6
+// ============================================================================
+//  PIPS FLOW  —  Order Flow Zones + Volume Profile POC Signal Engine
+//  Made By Mohamed Nagui
+//
+//  • Order Flow : real intrabar delta (lower-timeframe buy/sell volume) with a
+//                 candle-geometry fallback, rolling cumulative delta (CVD),
+//                 absorption detection and institutional Order Flow Zones
+//                 (displacement candles with dominant delta + high volume).
+//  • Volume     : rolling Volume Profile → POC / VAH / VAL (Value Area) +
+//                 buy/sell split histogram drawn on the right of the chart.
+//  • Signals    : entries only at a location (OF zone / POC / VA edge) +
+//                 rejection candle + order-flow confirmation + confluence
+//                 score. Tight stop behind the rejection wick, TP1 = 2R,
+//                 TP2 = 3R, stop to break-even after TP1, live win-rate stats.
+//  Works on every timeframe — defaults tuned for Gold (XAUUSD).
+// ============================================================================
+indicator("Pips Flow — Order Flow + Volume POC | Made By Mohamed Nagui", shorttitle="Pips Flow", overlay=true, max_labels_count=500, max_lines_count=500, max_boxes_count=500, max_bars_back=600)
+
+// ============================== INPUTS =====================================
+grpSig = "🎯 الإشارات — Signals"
+minScore  = input.int(70, "أقل قوة إشارة % (Min Score)", minval=0, maxval=100, group=grpSig, tooltip="كل ما ترفعها الإشارات تقل لكن تبقى أقوى. 70 متوازن — 80+ للإشارات القوية جدًا فقط")
+rrRatio   = input.float(2.0, "الهدف الأول TP1 (× الاستوب)", minval=1.0, step=0.25, group=grpSig)
+tp2Ratio  = input.float(3.0, "الهدف الثاني TP2 (× الاستوب)", minval=1.0, step=0.25, group=grpSig)
+atrLen    = input.int(14, "ATR Length", minval=1, group=grpSig)
+slBufAtr  = input.float(0.10, "هامش الاستوب خلف الذيل (× ATR)", minval=0.0, step=0.05, group=grpSig)
+maxSlAtr  = input.float(1.2, "أقصى حجم استوب (× ATR) — يتجاهل الإشارات الأوسع", minval=0.2, step=0.1, group=grpSig)
+minSlAtr  = input.float(0.35, "أقل حجم استوب (× ATR) — حماية من ضوضاء السعر", minval=0.05, step=0.05, group=grpSig)
+oneTrade  = input.bool(true, "صفقة واحدة في نفس الوقت", group=grpSig)
+moveBE    = input.bool(true, "نقل الاستوب لنقطة الدخول بعد TP1", group=grpSig)
+clearPath = input.bool(true, "اشتراط طريق مفتوح للهدف (لا منطقة معاكسة قبل TP1)", group=grpSig)
+calcBars  = input.int(4000, "حساب على آخر N شمعة", minval=300, maxval=20000, group=grpSig, tooltip="لتسريع المؤشر — الإشارات والإحصائيات تُحسب على آخر N شمعة فقط")
+
+grpFil = "🧭 الفلاتر — Filters"
+useTrend = input.bool(true, "احتساب اتجاه EMA في قوة الإشارة", group=grpFil)
+trendLen = input.int(50, "EMA Trend Length", minval=2, group=grpFil)
+showEma  = input.bool(false, "رسم EMA على الشارت", group=grpFil)
+useHTF   = input.bool(true, "احتساب اتجاه الفريم الأكبر (HTF)", group=grpFil)
+htfIn    = input.timeframe("", "الفريم الأكبر (فاضي = تلقائي)", group=grpFil, tooltip="تلقائي: 1m→15m | 5m/15m→1H | 30m/1H→4H | 4H→D | D→W")
+useSess  = input.bool(false, "التداول في جلسات لندن + نيويورك فقط (للفريمات الصغيرة)", group=grpFil)
+sessLon  = input.session("0700-1600", "جلسة لندن (UTC)", group=grpFil)
+sessNY   = input.session("1200-2100", "جلسة نيويورك (UTC)", group=grpFil)
+
+grpOF = "🌊 الأوردر فلو — Order Flow"
+useLTF     = input.bool(true, "دلتا حقيقية من فريم أصغر (Intrabar Delta)", group=grpOF, tooltip="بيحسب حجم الشراء والبيع الحقيقي من شموع الفريم الأصغر. لو مش متاح بيرجع لتقدير من شكل الشمعة")
+cvdLen     = input.int(20, "فترة الدلتا التراكمية (CVD)", minval=2, group=grpOF)
+dispAtr    = input.float(1.0, "قوة الشمعة الاندفاعية (× ATR)", minval=0.3, step=0.1, group=grpOF)
+relVolMin  = input.float(1.3, "أقل حجم نسبي لإنشاء منطقة", minval=0.5, step=0.1, group=grpOF)
+dRatioMin  = input.float(0.20, "أقل نسبة دلتا لإنشاء منطقة (0-1)", minval=0.0, maxval=1.0, step=0.05, group=grpOF)
+maxZoneAtr = input.float(1.5, "أقصى سُمك للمنطقة (× ATR)", minval=0.2, step=0.1, group=grpOF)
+maxZones   = input.int(4, "أقصى عدد مناطق لكل اتجاه", minval=1, maxval=10, group=grpOF)
+maxTaps    = input.int(2, "أقصى عدد لمسات للمنطقة (Fresh zones)", minval=1, maxval=10, group=grpOF)
+zoneLife   = input.int(300, "عمر المنطقة (شموع)", minval=20, group=grpOF)
+showZones  = input.bool(true, "رسم مناطق الأوردر فلو", group=grpOF)
+
+grpVP = "📊 الفوليوم بروفايل — Volume Profile / POC"
+vpLen    = input.int(150, "فترة البروفايل (شموع)", minval=20, maxval=500, group=grpVP)
+vpRows   = input.int(40, "عدد المستويات (Rows)", minval=10, maxval=100, group=grpVP)
+vaPct    = input.float(70.0, "Value Area %", minval=50.0, maxval=95.0, group=grpVP) / 100.0
+vpStep   = input.int(2, "تحديث البروفايل كل N شمعة (تاريخيًا)", minval=1, maxval=10, group=grpVP)
+showPOC  = input.bool(true, "إظهار POC", group=grpVP)
+showVA   = input.bool(true, "إظهار VAH / VAL", group=grpVP)
+showVP   = input.bool(true, "رسم هيستوجرام الفوليوم (Buy / Sell)", group=grpVP)
+vpWidth  = input.int(40, "عرض الهيستوجرام (شموع)", minval=10, maxval=150, group=grpVP)
+vpOffset = input.int(12, "إزاحة الهيستوجرام يمين السعر", minval=2, maxval=100, group=grpVP)
+
+grpVis = "🎨 الشكل — Style"
+cBull = input.color(#00E676, "شراء / طلب", group=grpVis)
+cBear = input.color(#FF3D57, "بيع / عرض", group=grpVis)
+cGold = input.color(#D4AF37, "ذهبي", group=grpVis)
+cPOC  = input.color(#FFC400, "POC", group=grpVis)
+pipIn = input.float(0.0, "حجم البيب (0 = تلقائي)", minval=0.0, group=grpVis, tooltip="تلقائي: الدهب 0.1 | الفوركس 10 تيك | غير كده تيك واحد")
+
+grpDash = "🧾 الداشبورد — Dashboard"
+showDash  = input.bool(true, "إظهار الداشبورد", group=grpDash)
+dashPosIn = input.string("Top Right", "المكان", options=["Top Right", "Top Left", "Middle Right", "Bottom Right", "Bottom Left"], group=grpDash)
+dashSzIn  = input.string("Small", "الحجم", options=["Tiny", "Small", "Normal"], group=grpDash)
+
+// ============================== CORE =======================================
+atr    = ta.atr(atrLen)
+emaT   = ta.ema(close, trendLen)
+vol    = nz(volume)
+volSma = ta.sma(vol, 20)
+relVol = volSma > 0 ? vol / volSma : 0.0
+rng    = high - low
+tfSec  = timeframe.in_seconds()
+inCalc = bar_index >= last_bar_index - calcBars
+hasVol = ta.cum(vol) > 0
+
+isGold = str.contains(syminfo.ticker, "XAU") or str.contains(syminfo.ticker, "GOLD")
+pip    = pipIn > 0 ? pipIn : isGold ? 0.1 : syminfo.type == "forex" ? syminfo.mintick * 10 : syminfo.mintick
+
+// ---------- Order Flow : intrabar delta ----------
+string ltfStr = tfSec <= 900 ? "1" : tfSec <= 3600 ? "5" : tfSec <= 14400 ? "15" : tfSec <= 86400 ? "60" : "240"
+[ltfO, ltfC, ltfV] = request.security_lower_tf(syminfo.tickerid, ltfStr, [open, close, volume], ignore_invalid_timeframe=true)
+
+float ltfDelta = na
+if useLTF and tfSec > 60 and array.size(ltfV) > 0
+    float d = 0.0
+    for j = 0 to array.size(ltfV) - 1
+        float o = array.get(ltfO, j)
+        float c = array.get(ltfC, j)
+        float v = nz(array.get(ltfV, j))
+        d += c > o ? v : c < o ? -v : 0.0
+    ltfDelta := d
+
+float geoDelta  = rng > 0 ? vol * ((close - low) - (high - close)) / rng : 0.0
+bool  realDelta = not na(ltfDelta)
+float barDelta  = realDelta ? ltfDelta : geoDelta
+float dRatio    = vol > 0 ? barDelta / vol : 0.0
+float buyVol    = math.max(0.0, (vol + barDelta) / 2)
+float cvdSum    = math.sum(barDelta, cvdLen)
+float cvdVolSum = math.sum(vol, cvdLen)
+float cvdRatio  = cvdVolSum > 0 ? cvdSum / cvdVolSum : 0.0
+float buyPct    = cvdVolSum > 0 ? 50 + cvdRatio * 50 : 50.0
+
+// ---------- Higher timeframe bias (non-repainting) ----------
+string htfAuto = tfSec <= 60 ? "15" : tfSec <= 900 ? "60" : tfSec <= 3600 ? "240" : tfSec <= 14400 ? "D" : tfSec <= 86400 ? "W" : "M"
+string htfTF   = htfIn == "" ? htfAuto : htfIn
+[htfC, htfE] = request.security(syminfo.tickerid, htfTF, [close[1], ta.ema(close, 50)[1]], lookahead=barmerge.lookahead_on)
+bool htfBull = htfC > htfE
+bool htfBear = htfC < htfE
+
+// ---------- Sessions ----------
+bool inLon  = not na(time(timeframe.period, sessLon, "UTC"))
+bool inNY   = not na(time(timeframe.period, sessNY, "UTC"))
+bool inSess = not useSess or not timeframe.isintraday or inLon or inNY
+
+// ============================ VOLUME PROFILE ===============================
+vpHi = ta.highest(high, vpLen)
+vpLo = ta.lowest(low, vpLen)
+
+var array<float> vpVol = array.new_float(vpRows, 0.0)
+var array<float> vpBuy = array.new_float(vpRows, 0.0)
+var float poc    = na
+var float vah    = na
+var float val    = na
+var int   pocRow = 0
+var int   vaUp   = 0
+var int   vaDn   = 0
+var float vpRowH = na
+var float vpBase = na
+
+bool calcVP = inCalc and bar_index >= vpLen and (bar_index % vpStep == 0 or barstate.islast)
+if calcVP
+    float rowH = (vpHi - vpLo) / vpRows
+    if rowH > 0
+        array.fill(vpVol, 0.0)
+        array.fill(vpBuy, 0.0)
+        for i = 0 to vpLen - 1
+            float h  = high[i]
+            float l  = low[i]
+            float v  = vol[i]
+            float bv = buyVol[i]
+            int r0 = math.max(0, math.min(vpRows - 1, math.floor((l - vpLo) / rowH)))
+            int r1 = math.max(0, math.min(vpRows - 1, math.floor((h - vpLo) / rowH)))
+            int n  = r1 - r0 + 1
+            for r = r0 to r1
+                array.set(vpVol, r, array.get(vpVol, r) + v / n)
+                array.set(vpBuy, r, array.get(vpBuy, r) + bv / n)
+        float mx = array.max(vpVol)
+        if mx > 0
+            int   pIdx   = array.indexof(vpVol, mx)
+            float total  = array.sum(vpVol)
+            float target = total * vaPct
+            float acc    = array.get(vpVol, pIdx)
+            int   up     = pIdx
+            int   dn     = pIdx
+            while acc < target and (up < vpRows - 1 or dn > 0)
+                float vUp = up < vpRows - 1 ? array.get(vpVol, up + 1) : -1.0
+                float vDn = dn > 0 ? array.get(vpVol, dn - 1) : -1.0
+                if vUp >= vDn
+                    up  += 1
+                    acc += vUp
+                else
+                    dn  -= 1
+                    acc += vDn
+            pocRow := pIdx
+            vaUp   := up
+            vaDn   := dn
+            vpRowH := rowH
+            vpBase := vpLo
+            poc    := vpLo + rowH * (pIdx + 0.5)
+            vah    := vpLo + rowH * (up + 1)
+            val    := vpLo + rowH * dn
+
+pPoc = plot(showPOC ? poc : na, "POC", color=cPOC, linewidth=2, style=plot.style_stepline)
+pVah = plot(showVA ? vah : na, "VAH", color=color.new(cGold, 45), linewidth=1, style=plot.style_stepline)
+pVal = plot(showVA ? val : na, "VAL", color=color.new(cGold, 45), linewidth=1, style=plot.style_stepline)
+fill(pVah, pVal, color=showVA ? color.new(cGold, 95) : na, title="Value Area")
+plot(showEma ? emaT : na, "EMA Trend", color=color.new(color.gray, 30))
+
+// ============================ ORDER FLOW ZONES =============================
+type OFZone
+    float top
+    float bot
+    int   dir
+    int   born
+    float dpct
+    box   bx
+    int   taps = 0
+
+var array<OFZone> zones = array.new<OFZone>()
+
+f_trimZones(int d) =>
+    int cnt = 0
+    for z in zones
+        if z.dir == d
+            cnt += 1
+    if cnt > maxZones
+        int idx = -1
+        for k = 0 to zones.size() - 1
+            if idx < 0 and zones.get(k).dir == d
+                idx := k
+        if idx >= 0
+            OFZone old = zones.get(idx)
+            if not na(old.bx)
+                box.delete(old.bx)
+            zones.remove(idx)
+
+f_overlaps(int d, float t, float b) =>
+    bool hit = false
+    for z in zones
+        if z.dir == d and b <= z.top and t >= z.bot
+            hit := true
+    hit
+
+bool bullDisp = close > open and (close - open) >= dispAtr * atr and relVol >= relVolMin and dRatio >= dRatioMin
+bool bearDisp = close < open and (open - close) >= dispAtr * atr and relVol >= relVolMin and dRatio <= -dRatioMin
+
+if inCalc and bullDisp
+    bool  prevBear = close[1] < open[1]
+    float zt = prevBear ? open[1] : open
+    float zb = prevBear ? math.min(low[1], low) : low
+    if zt > zb and (zt - zb) <= maxZoneAtr * atr and not f_overlaps(1, zt, zb)
+        box bx = na
+        if showZones
+            bx := box.new(bar_index - 1, zt, bar_index + 5, zb, border_color=color.new(cBull, 35), border_width=1, bgcolor=color.new(cBull, 85), text="Buy Flow  Δ+" + str.tostring(math.round(dRatio * 100)) + "%", text_size=size.tiny, text_color=color.new(cBull, 0), text_halign=text.align_right, text_valign=text.align_center)
+        zones.push(OFZone.new(zt, zb, 1, bar_index, dRatio, bx))
+        f_trimZones(1)
+
+if inCalc and bearDisp
+    bool  prevBull = close[1] > open[1]
+    float zb = prevBull ? open[1] : open
+    float zt = prevBull ? math.max(high[1], high) : high
+    if zt > zb and (zt - zb) <= maxZoneAtr * atr and not f_overlaps(-1, zt, zb)
+        box bx = na
+        if showZones
+            bx := box.new(bar_index - 1, zt, bar_index + 5, zb, border_color=color.new(cBear, 35), border_width=1, bgcolor=color.new(cBear, 85), text="Sell Flow  Δ" + str.tostring(math.round(dRatio * 100)) + "%", text_size=size.tiny, text_color=color.new(cBear, 0), text_halign=text.align_right, text_valign=text.align_center)
+        zones.push(OFZone.new(zt, zb, -1, bar_index, dRatio, bx))
+        f_trimZones(-1)
+
+// ---- maintain zones + detect taps ----
+bool  tapBull    = false
+bool  tapBear    = false
+float tapBullBot = na
+float tapBearTop = na
+if zones.size() > 0
+    for i = zones.size() - 1 to 0
+        OFZone z = zones.get(i)
+        bool dead = false
+        if bar_index > z.born + 1
+            if z.dir == 1
+                if low <= z.top and low[1] > z.top
+                    z.taps += 1
+                if low <= z.top and close > z.bot and z.taps <= maxTaps
+                    tapBull    := true
+                    tapBullBot := na(tapBullBot) ? z.bot : math.max(tapBullBot, z.bot)
+                if close < z.bot
+                    dead := true
+            else
+                if high >= z.bot and high[1] < z.bot
+                    z.taps += 1
+                if high >= z.bot and close < z.top and z.taps <= maxTaps
+                    tapBear    := true
+                    tapBearTop := na(tapBearTop) ? z.top : math.min(tapBearTop, z.top)
+                if close > z.top
+                    dead := true
+        if bar_index - z.born > zoneLife
+            dead := true
+        if dead
+            if not na(z.bx)
+                box.delete(z.bx)
+            zones.remove(i)
+        else if not na(z.bx)
+            box.set_right(z.bx, bar_index + 5)
+
+f_blocked(int d, float e, float t) =>
+    bool b = false
+    for z in zones
+        if d == 1 and z.dir == -1 and z.bot > e and z.bot < t
+            b := true
+        if d == -1 and z.dir == 1 and z.top < e and z.top > t
+            b := true
+    b
+
+int cntDem = 0
+int cntSup = 0
+for z in zones
+    if z.dir == 1
+        cntDem += 1
+    else
+        cntSup += 1
+
+// ============================== SIGNAL ENGINE ==============================
+float tol      = 0.15 * atr
+float closePos = rng > 0 ? (close - low) / rng : 0.5
+
+// Location : POC re-test / Value Area edge (failed auction)
+bool pocLong  = not na(poc) and close[1] > poc and low <= poc + tol and close > poc
+bool valLong  = not na(val) and low <= val + tol and close > val
+bool pocShort = not na(poc) and close[1] < poc and high >= poc - tol and close < poc
+bool vahShort = not na(vah) and high >= vah - tol and close < vah
+bool lvlLong  = pocLong or valLong
+bool lvlShort = pocShort or vahShort
+
+// Rejection candle (close in upper/lower 40% + bullish body or long wick)
+bool bullRej = closePos >= 0.6 and (close > open or (math.min(open, close) - low) >= 0.5 * rng)
+bool bearRej = closePos <= 0.4 and (close < open or (high - math.max(open, close)) >= 0.5 * rng)
+
+// Order-flow confirmation : aggressive delta OR absorption
+bool absorbLong  = dRatio <= -0.10 and closePos >= 0.7 and relVol >= 1.2
+bool absorbShort = dRatio >= 0.10 and closePos <= 0.3 and relVol >= 1.2
+bool deltaLong   = dRatio >= 0.10 or absorbLong
+bool deltaShort  = dRatio <= -0.10 or absorbShort
+
+f_score(bool zone, bool lvl, bool dOk, bool cvdOk, bool volOk, bool trOk, bool htfOk) =>
+    float poss = 40.0 + 20.0 + 15.0 + 10.0 + (useTrend ? 7.5 : 0.0) + (useHTF ? 7.5 : 0.0)
+    float loc  = zone and lvl ? 40.0 : zone ? 30.0 : lvl ? 25.0 : 0.0
+    float earn = loc + (dOk ? 20.0 : 0.0) + (cvdOk ? 15.0 : 0.0) + (volOk ? 10.0 : 0.0) + (useTrend and trOk ? 7.5 : 0.0) + (useHTF and htfOk ? 7.5 : 0.0)
+    math.round(earn / poss * 100)
+
+float scoreL = f_score(tapBull, lvlLong, deltaLong, cvdRatio > 0, relVol >= 1.0, close > emaT and emaT >= emaT[3], htfBull)
+float scoreS = f_score(tapBear, lvlShort, deltaShort, cvdRatio < 0, relVol >= 1.0, close < emaT and emaT <= emaT[3], htfBear)
+
+// Stops : behind the rejection wick, clamped between min/max ATR
+float slL   = low - slBufAtr * atr
+float riskL = close - slL
+if riskL < minSlAtr * atr
+    slL   := close - minSlAtr * atr
+    riskL := minSlAtr * atr
+float slS   = high + slBufAtr * atr
+float riskS = slS - close
+if riskS < minSlAtr * atr
+    slS   := close + minSlAtr * atr
+    riskS := minSlAtr * atr
+float tp1L = close + rrRatio * riskL
+float tp2L = close + tp2Ratio * riskL
+float tp1S = close - rrRatio * riskS
+float tp2S = close - tp2Ratio * riskS
+
+// ============================== TRADE MANAGER ==============================
+var int    tDir    = 0
+var float  tEntry  = na
+var float  tSL     = na
+var float  tTP1    = na
+var float  tTP2    = na
+var float  tRisk   = na
+var int    tBar    = na
+var bool   tTp1Hit = false
+var string tStatus = "Waiting for setup"
+var color  tStCol  = color.gray
+var int    wins    = 0
+var int    losses  = 0
+var int    tp2Hits = 0
+var string lastSig = "—"
+var color  lastCol = color.gray
+var int    lastScore = 0
+var box    tRiskBx = na
+var box    tRewBx  = na
+var line   tTp2Ln  = na
+var array<box>  histBoxes = array.new<box>()
+
+f_closeTrade() =>
+    if not na(tRiskBx)
+        box.set_right(tRiskBx, bar_index)
+    if not na(tRewBx)
+        box.set_right(tRewBx, bar_index)
+    if not na(tTp2Ln)
+        line.set_x2(tTp2Ln, bar_index)
+
+if tDir != 0 and bar_index > tBar
+    bool hitSL  = tDir == 1 ? low <= tSL : high >= tSL
+    bool hitTP1 = tDir == 1 ? high >= tTP1 : low <= tTP1
+    bool hitTP2 = tDir == 1 ? high >= tTP2 : low <= tTP2
+    if not tTp1Hit
+        if hitSL
+            losses  += 1
+            tStatus := "❌ Stop Loss"
+            tStCol  := cBear
+            f_closeTrade()
+            tDir    := 0
+        else if hitTP1
+            wins    += 1
+            tTp1Hit := true
+            tStatus := "✅ TP1 Hit" + (moveBE ? " — SL @ BE" : "")
+            tStCol  := cBull
+            if moveBE
+                tSL := tEntry
+            if hitTP2
+                tp2Hits += 1
+                tStatus := "🏆 TP2 Hit"
+                f_closeTrade()
+                tDir    := 0
+    else
+        if hitTP2
+            tp2Hits += 1
+            tStatus := "🏆 TP2 Hit"
+            tStCol  := cGold
+            f_closeTrade()
+            tDir    := 0
+        else if hitSL
+            tStatus := moveBE ? "🔒 Closed @ BE (TP1 secured)" : "✅ TP1 secured — SL hit"
+            tStCol  := cGold
+            f_closeTrade()
+            tDir    := 0
+    if tDir != 0
+        if not na(tRiskBx)
+            box.set_right(tRiskBx, bar_index + 1)
+        if not na(tRewBx)
+            box.set_right(tRewBx, bar_index + 1)
+        if not na(tTp2Ln)
+            line.set_x2(tTp2Ln, bar_index + 1)
+
+bool canTrade = not oneTrade or tDir == 0
+bool baseOk   = inCalc and inSess and barstate.isconfirmed and atr > 0 and canTrade
+
+bool longSig  = baseOk and (tapBull or lvlLong) and bullRej and scoreL >= minScore and riskL <= maxSlAtr * atr and (not clearPath or not f_blocked(1, close, tp1L))
+bool shortSig = baseOk and not longSig and (tapBear or lvlShort) and bearRej and scoreS >= minScore and riskS <= maxSlAtr * atr and (not clearPath or not f_blocked(-1, close, tp1S))
+
+f_pips(float x) =>
+    str.tostring(math.abs(x) / pip, "#.0")
+
+f_px(float x) =>
+    str.tostring(x, format.mintick)
+
+if longSig or shortSig
+    int   dir = longSig ? 1 : -1
+    float sl  = longSig ? slL : slS
+    float t1  = longSig ? tp1L : tp1S
+    float t2  = longSig ? tp2L : tp2S
+    int   sc  = int(longSig ? scoreL : scoreS)
+    color col = longSig ? cBull : cBear
+    string why = longSig ? (tapBull and lvlLong ? "OF Zone + " + (pocLong ? "POC" : "VAL") : tapBull ? "OF Zone" : pocLong ? "POC Retest" : "VAL Rejection") : (tapBear and lvlShort ? "OF Zone + " + (pocShort ? "POC" : "VAH") : tapBear ? "OF Zone" : pocShort ? "POC Retest" : "VAH Rejection")
+    string flow = (longSig ? absorbLong : absorbShort) ? "Absorption" : "Delta " + (dRatio >= 0 ? "+" : "") + str.tostring(math.round(dRatio * 100)) + "%"
+    if tDir != 0
+        f_closeTrade()
+    tDir    := dir
+    tEntry  := close
+    tSL     := sl
+    tTP1    := t1
+    tTP2    := t2
+    tRisk   := math.abs(close - sl)
+    tBar    := bar_index
+    tTp1Hit := false
+    tStatus := longSig ? "🟢 BUY Running" : "🔴 SELL Running"
+    tStCol  := col
+    lastSig := (longSig ? "BUY ▲ " : "SELL ▼ ") + str.tostring(sc) + "%"
+    lastCol := col
+    lastScore := sc
+    tRiskBx := box.new(bar_index, longSig ? close : sl, bar_index + 1, longSig ? sl : close, border_color=color.new(cBear, 60), bgcolor=color.new(cBear, 82))
+    tRewBx  := box.new(bar_index, longSig ? t1 : close, bar_index + 1, longSig ? close : t1, border_color=color.new(cBull, 60), bgcolor=color.new(cBull, 82))
+    tTp2Ln  := line.new(bar_index, t2, bar_index + 1, t2, color=color.new(cBull, 25), style=line.style_dashed, width=1)
+    histBoxes.push(tRiskBx)
+    histBoxes.push(tRewBx)
+    while histBoxes.size() > 160
+        box.delete(histBoxes.shift())
+    string tip = (longSig ? "BUY" : "SELL") + "  |  Score " + str.tostring(sc) + "%\nSetup: " + why + "\nFlow: " + flow + "\nEntry: " + f_px(close) + "\nSL: " + f_px(sl) + "  (" + f_pips(close - sl) + " pips)\nTP1: " + f_px(t1) + "  (" + f_pips(t1 - close) + " pips)\nTP2: " + f_px(t2) + "  (" + f_pips(t2 - close) + " pips)"
+    if longSig
+        label.new(bar_index, low, "BUY\n" + str.tostring(sc) + "%", yloc=yloc.belowbar, style=label.style_label_up, color=cBull, textcolor=#0B0F19, size=size.small, tooltip=tip)
+    else
+        label.new(bar_index, high, "SELL\n" + str.tostring(sc) + "%", yloc=yloc.abovebar, style=label.style_label_down, color=cBear, textcolor=color.white, size=size.small, tooltip=tip)
+    string msg = "Pips Flow " + (longSig ? "BUY" : "SELL") + " " + syminfo.ticker + " [" + timeframe.period + "] | Score " + str.tostring(sc) + "% | " + why + " | Entry " + f_px(close) + " | SL " + f_px(sl) + " | TP1 " + f_px(t1) + " | TP2 " + f_px(t2)
+    alert(msg, alert.freq_once_per_bar_close)
+
+alertcondition(longSig, "Pips Flow — BUY", "Pips Flow BUY {{ticker}} @ {{close}}")
+alertcondition(shortSig, "Pips Flow — SELL", "Pips Flow SELL {{ticker}} @ {{close}}")
+alertcondition(longSig or shortSig, "Pips Flow — Any Signal", "Pips Flow signal {{ticker}} @ {{close}}")
+
+// ---- live price tags for the running trade ----
+var array<label> tags = array.new<label>()
+if barstate.islast
+    for t in tags
+        label.delete(t)
+    array.clear(tags)
+    if tDir != 0
+        int xr = bar_index + 3
+        tags.push(label.new(xr, tTP2, "TP2  " + f_px(tTP2) + "  (" + f_pips(tTP2 - tEntry) + " p)", style=label.style_label_left, color=color.new(cBull, 30), textcolor=color.white, size=size.tiny))
+        tags.push(label.new(xr, tTP1, "TP1  " + f_px(tTP1) + "  (" + f_pips(tTP1 - tEntry) + " p)", style=label.style_label_left, color=cBull, textcolor=#0B0F19, size=size.tiny))
+        tags.push(label.new(xr, tEntry, "ENTRY  " + f_px(tEntry), style=label.style_label_left, color=cGold, textcolor=#0B0F19, size=size.tiny))
+        tags.push(label.new(xr, tSL, "SL  " + f_px(tSL) + "  (" + f_pips(tSL - tEntry) + " p)", style=label.style_label_left, color=cBear, textcolor=color.white, size=size.tiny))
+
+// ---- volume profile histogram (right side) ----
+var array<box> vpBoxes = array.new<box>()
+if barstate.islast and showVP and not na(vpBase)
+    for b in vpBoxes
+        box.delete(b)
+    array.clear(vpBoxes)
+    float mxv = array.max(vpVol)
+    if mxv > 0
+        int x0 = bar_index + vpOffset
+        for r = 0 to vpRows - 1
+            float v   = array.get(vpVol, r)
+            float bvv = array.get(vpBuy, r)
+            int   w   = int(math.round(vpWidth * v / mxv))
+            int   wb  = v > 0 ? int(math.round(w * bvv / v)) : 0
+            float yb  = vpBase + vpRowH * r
+            float yt  = yb + vpRowH
+            bool  inVA = r >= vaDn and r <= vaUp
+            int   tr   = inVA ? 40 : 75
+            if wb > 0
+                vpBoxes.push(box.new(x0, yt, x0 + wb, yb, border_color=color.new(cBull, 100), bgcolor=color.new(cBull, tr)))
+            if w - wb > 0
+                vpBoxes.push(box.new(x0 + wb, yt, x0 + w, yb, border_color=color.new(cBear, 100), bgcolor=color.new(cBear, tr)))
+            if r == pocRow
+                vpBoxes.push(box.new(x0, yt, x0 + vpWidth, yb, border_color=cPOC, border_width=1, bgcolor=color.new(cPOC, 88), text="POC " + f_px(poc), text_size=size.tiny, text_color=cPOC, text_halign=text.align_right))
+
+// ================================ DASHBOARD ================================
+cBg    = #0B0F19
+cRowA  = #111827
+cRowB  = #0E1420
+cDim   = #9CA3AF
+dashPos = dashPosIn == "Top Left" ? position.top_left : dashPosIn == "Middle Right" ? position.middle_right : dashPosIn == "Bottom Right" ? position.bottom_right : dashPosIn == "Bottom Left" ? position.bottom_left : position.top_right
+tsz     = dashSzIn == "Tiny" ? size.tiny : dashSzIn == "Normal" ? size.normal : size.small
+
+var table dash = table.new(dashPos, 2, 22, bgcolor=cBg, frame_color=cGold, frame_width=2, border_color=#1F2937, border_width=1)
+
+f_row(int r, string k, string v, color vc) =>
+    color bg = r % 2 == 0 ? cRowA : cRowB
+    table.cell(dash, 0, r, k, text_color=cDim, text_size=tsz, text_halign=text.align_left, bgcolor=bg)
+    table.cell(dash, 1, r, v, text_color=vc, text_size=tsz, text_halign=text.align_right, bgcolor=bg)
+
+f_head(int r, string txt, color tc, color bg, string sz) =>
+    table.cell(dash, 0, r, txt, text_color=tc, text_size=sz, text_halign=text.align_center, bgcolor=bg)
+    table.merge_cells(dash, 0, r, 1, r)
+
+if showDash and barstate.islast
+    int biasPts = (close > poc ? 1 : -1) + (cvdRatio > 0 ? 1 : -1) + (close > emaT ? 1 : -1) + (useHTF ? (htfBull ? 1 : htfBear ? -1 : 0) : 0)
+    string biasTxt = biasPts >= 2 ? "▲ BULLISH" : biasPts <= -2 ? "▼ BEARISH" : "◆ NEUTRAL"
+    color  biasCol = biasPts >= 2 ? cBull : biasPts <= -2 ? cBear : cGold
+    string locTxt = tapBull ? "In Buy Flow Zone" : tapBear ? "In Sell Flow Zone" : close > vah ? "Above Value (VAH)" : close < val ? "Below Value (VAL)" : math.abs(close - poc) <= tol * 2 ? "At POC" : "Inside Value Area"
+    color  locCol = tapBull ? cBull : tapBear ? cBear : close > vah ? cBull : close < val ? cBear : cGold
+
+    f_head(0, "⚡ PIPS FLOW ⚡", cGold, #05070D, tsz == size.tiny ? size.small : size.normal)
+    f_head(1, "Order Flow  •  Volume POC  •  Smart Signals", cDim, #05070D, size.tiny)
+    f_row(2, "Symbol", syminfo.ticker + "  •  " + timeframe.period, color.white)
+    f_row(3, "Market Bias", biasTxt, biasCol)
+    f_row(4, "Price Location", locTxt, locCol)
+    f_row(5, "POC", f_px(poc), cPOC)
+    f_row(6, "Value Area", f_px(val) + "  —  " + f_px(vah), cGold)
+    f_row(7, "Bar Delta", (barDelta >= 0 ? "+" : "") + str.tostring(math.round(dRatio * 100)) + "%" + (absorbLong ? "  Absorb ▲" : absorbShort ? "  Absorb ▼" : ""), barDelta >= 0 ? cBull : cBear)
+    f_row(8, "Buyers / Sellers (" + str.tostring(cvdLen) + ")", str.tostring(math.round(buyPct)) + "%  /  " + str.tostring(math.round(100 - buyPct)) + "%", buyPct >= 50 ? cBull : cBear)
+    f_row(9, "Relative Volume", str.tostring(relVol, "#.##") + "x", relVol >= 1.3 ? cGold : color.white)
+    f_row(10, "HTF Trend (" + htfTF + ")", htfBull ? "▲ Bullish" : htfBear ? "▼ Bearish" : "—", htfBull ? cBull : htfBear ? cBear : cDim)
+    f_row(11, "Flow Zones", "Buy " + str.tostring(cntDem) + "  |  Sell " + str.tostring(cntSup), color.white)
+    f_head(12, "━━━━  SIGNAL  ━━━━", cGold, #05070D, size.tiny)
+    f_row(13, "Last Signal", lastSig, lastCol)
+    f_row(14, "Entry", na(tEntry) ? "—" : f_px(tEntry), cGold)
+    f_row(15, "Stop Loss", na(tSL) ? "—" : f_px(tSL) + "  (" + f_pips(tSL - tEntry) + " p)", cBear)
+    f_row(16, "TP1  (" + str.tostring(rrRatio, "#.##") + "R)", na(tTP1) ? "—" : f_px(tTP1) + "  (" + f_pips(tTP1 - tEntry) + " p)", cBull)
+    f_row(17, "TP2  (" + str.tostring(tp2Ratio, "#.##") + "R)", na(tTP2) ? "—" : f_px(tTP2) + "  (" + f_pips(tTP2 - tEntry) + " p)", cBull)
+    f_row(18, "Status", tStatus, tStCol)
+    int closedTr = wins + losses
+    f_row(19, "Win Rate (TP1)", closedTr > 0 ? str.tostring(math.round(100.0 * wins / closedTr)) + "%  (" + str.tostring(wins) + "W / " + str.tostring(losses) + "L • TP2 " + str.tostring(tp2Hits) + ")" : "—", closedTr > 0 and wins >= losses ? cBull : cDim)
+    f_row(20, "Data", not hasVol ? "⚠ No volume — use OANDA/FXCM feed" : realDelta ? "Intrabar Delta (" + ltfStr + "m)" : "Candle Delta (est.)", not hasVol ? cBear : realDelta ? cBull : cDim)
+    f_head(21, "Made By Mohamed Nagui", cGold, #05070D, tsz)
