@@ -17,6 +17,7 @@ int    N       = input.int(5, "عدد المناطق فوق / تحت", minval=1,
 string G2 = "② الإشارات وإدارة الصفقة"
 bool   showSig  = input.bool(true, "تفعيل إشارات كسر 5 دقائق", group=G2)
 bool   usePivot = input.bool(false, "إشارة على خط الإغلاق نفسه", group=G2)
+bool   dirOnly  = input.bool(true, "الإشارة في الاتجاه فقط", group=G2, tooltip="شراء فقط عند كسر مناطق فوق الإغلاق (R) لأعلى، وبيع فقط عند كسر مناطق تحت الإغلاق (S) لأسفل.\nمفيش شراء لو السعر رجع طلع فوق منطقة S، ومفيش بيع لو رجع نزل تحت منطقة R.")
 bool   oneTrade = input.bool(true, "صفقة واحدة في نفس الوقت", group=G2, tooltip="لو مفعّل: أي إشارة جديدة تتجاهل طول ما في صفقة شغالة.\nلو مقفول: الإشارة الجديدة تقفل الصفقة القديمة وتفتح الجديدة.")
 float  stopDist = input.float(8.5, "الستوب (بالسعر $)", minval=0.01, step=0.5, group=G2, tooltip="7 إلى 10 دولار في الذهب = 70 إلى 100 نقطة")
 string tpMode   = input.string("المنطقة التالية", "طريقة الهدف", options=["المنطقة التالية", "نسبة R:R"], group=G2)
@@ -28,7 +29,7 @@ color  dnCol    = input.color(#ff4d6d, "مناطق تحت", group=G3, inline="c"
 color  pvCol    = input.color(#f5c518, "الإغلاق", group=G3, inline="c")
 int    lnW      = input.int(2, "سُمك الخطوط", minval=1, maxval=4, group=G3)
 bool   showLbl  = input.bool(true, "إظهار أسماء وأسعار المناطق", group=G3)
-bool   showHist = input.bool(true, "إبقاء مناطق الأيام السابقة", group=G3)
+bool   showHist = input.bool(false, "إبقاء مناطق الأيام السابقة", group=G3)
 bool   showTrd  = input.bool(true, "رسم الدخول / الستوب / الهدف", group=G3)
 int    lblOff   = input.int(8, "إزاحة الأسماء (شموع)", minval=1, maxval=100, group=G3)
 
@@ -106,11 +107,11 @@ if showSig and trig and tfOK and lv.size() > 0 and not na(c1) and not na(c2)
         if i == N and not usePivot
             continue
         float L = lv.get(i)
-        if c2 <= L and c1 > L              // إغلاق فوق المنطقة → شراء (أعلى منطقة اتكسرت)
+        if c2 <= L and c1 > L and (not dirOnly or i >= N)              // إغلاق فوق المنطقة → شراء (أعلى منطقة اتكسرت)
             sigDir := 1
             sigIdx := i
             sigLvl := L
-        if c2 >= L and c1 < L and sigDir == 0   // إغلاق تحت المنطقة → بيع (أدنى منطقة اتكسرت)
+        if c2 >= L and c1 < L and sigDir == 0 and (not dirOnly or i <= N)   // إغلاق تحت المنطقة → بيع (أدنى منطقة اتكسرت)
             sigDir := -1
             sigIdx := i
             sigLvl := L
