@@ -1,0 +1,59 @@
+//@version=6
+// ============================================================================
+//  Daily Close Zones  |  مناطق إغلاق اليوم السابق
+//  - يحدد سعر إغلاق شمعة اليوم السابق (الديلي)
+//  - يرسم خط كل "مسافة" ثابتة (افتراضي 8$ = 80 نقطة على الذهب)
+//  - 15 منطقة فوق (لون) و 15 منطقة تحت (لون آخر)
+//  - مع بداية يوم جديد تُحذف خطوط اليوم القديم وتُرسم خطوط اليوم الجديد فقط
+// ============================================================================
+indicator("Daily Close Zones", shorttitle = "DC Zones", overlay = true, max_lines_count = 200, max_labels_count = 200)
+
+// ---------------------------------------------------------------- Inputs
+stepSize    = input.float(8.0, "المسافة بين الخطوط (سعر)  |  Step", minval = 0.0001, step = 0.5, tooltip = "على الذهب: 8$ = 80 نقطة")
+levelsCount = input.int(15, "عدد المناطق فوق/تحت  |  Levels", minval = 1, maxval = 90)
+
+upColor     = input.color(color.new(color.teal, 0), "لون الخطوط فوق  |  Above")
+dnColor     = input.color(color.new(color.red, 0), "لون الخطوط تحت  |  Below")
+midColor    = input.color(color.new(color.yellow, 0), "لون خط الإغلاق  |  Prev Close")
+
+lineWidth   = input.int(1, "سُمك الخط  |  Width", minval = 1, maxval = 5)
+styleOpt    = input.string("Solid", "شكل الخط  |  Style", options = ["Solid", "Dashed", "Dotted"])
+showLabels  = input.bool(true, "إظهار السعر بجانب الخط  |  Show Labels")
+
+lineStyle = styleOpt == "Dashed" ? line.style_dashed : styleOpt == "Dotted" ? line.style_dotted : line.style_solid
+
+// ---------------------------------------------------------------- Previous day close
+// close[1] on the daily timeframe with lookahead_on = the close of the previous
+// completed daily candle (no repainting).
+prevClose = request.security(syminfo.tickerid, "D", close[1], lookahead = barmerge.lookahead_on)
+
+// ---------------------------------------------------------------- Storage
+var array<line>  zoneLines  = array.new<line>()
+var array<label> zoneLabels = array.new<label>()
+
+clearAll() =>
+    for ln in zoneLines
+        line.delete(ln)
+    for lb in zoneLabels
+        label.delete(lb)
+    array.clear(zoneLines)
+    array.clear(zoneLabels)
+
+// ---------------------------------------------------------------- Draw on each new day
+newDay = timeframe.change("D") or (array.size(zoneLines) == 0 and not na(prevClose))
+
+if newDay and not na(prevClose)
+    clearAll()
+    for i = -levelsCount to levelsCount
+        price = prevClose + i * stepSize
+        col   = i > 0 ? upColor : i < 0 ? dnColor : midColor
+        w     = i == 0 ? lineWidth + 1 : lineWidth
+        array.push(zoneLines, line.new(bar_index, price, bar_index + 1, price, extend = extend.right, color = col, width = w, style = i == 0 ? line.style_solid : lineStyle))
+        if showLabels
+            txt = i == 0 ? "Prev Close " + str.tostring(price, format.mintick) : (i > 0 ? "+" : "") + str.tostring(i) + "  " + str.tostring(price, format.mintick)
+            array.push(zoneLabels, label.new(bar_index, price, txt, style = label.style_label_left, color = color.new(color.black, 100), textcolor = col, size = size.small))
+
+// keep labels at the right edge of the chart
+if showLabels and barstate.islast
+    for lb in zoneLabels
+        label.set_x(lb, bar_index + 5)
