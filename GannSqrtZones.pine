@@ -1,0 +1,274 @@
+//@version=6
+indicator("Gann √ Zones Pro — 5m Breakout", shorttitle="Gann √ Zones", overlay=true, max_lines_count=500, max_labels_count=500)
+
+// ════════════════════════════════════════════════════════════════════════════
+//  الفكرة:
+//    الخطوة = الجذر التربيعي لإغلاق آخر شمعة يومية ÷ 2
+//    المناطق = الإغلاق ± (1..N) × الخطوة
+//    الإشارة = شمعة 5 دقائق تغلق فوق منطقة (شراء) أو تحتها (بيع)
+// ════════════════════════════════════════════════════════════════════════════
+
+// ───────────────────────────── الإعدادات ─────────────────────────────
+string G1 = "① مصدر الإغلاق اليومي"
+string srcSym = input.symbol("FOREXCOM:XAUUSD", "رمز الإغلاق اليومي", group=G1, tooltip="الرمز الذي يؤخذ منه إغلاق الشمعة اليومية. غيّره لو بتشتغل على أصل تاني.")
+float  divisor = input.float(2.0, "قسمة الجذر على", minval=0.1, step=0.5, group=G1)
+int    N       = input.int(5, "عدد المناطق فوق / تحت", minval=1, maxval=10, group=G1)
+
+string G2 = "② الإشارات وإدارة الصفقة"
+bool   showSig  = input.bool(true, "تفعيل إشارات كسر 5 دقائق", group=G2)
+bool   usePivot = input.bool(false, "إشارة على خط الإغلاق نفسه", group=G2)
+bool   oneTrade = input.bool(true, "صفقة واحدة في نفس الوقت", group=G2, tooltip="لو مفعّل: أي إشارة جديدة تتجاهل طول ما في صفقة شغالة.\nلو مقفول: الإشارة الجديدة تقفل الصفقة القديمة وتفتح الجديدة.")
+float  stopDist = input.float(8.5, "الستوب (بالسعر $)", minval=0.01, step=0.5, group=G2, tooltip="7 إلى 10 دولار في الذهب = 70 إلى 100 نقطة")
+string tpMode   = input.string("المنطقة التالية", "طريقة الهدف", options=["المنطقة التالية", "نسبة R:R"], group=G2)
+float  rr       = input.float(2.0, "نسبة R:R", minval=0.1, step=0.25, group=G2)
+
+string G3 = "③ الشكل"
+color  upCol    = input.color(#00e0a4, "مناطق فوق", group=G3, inline="c")
+color  dnCol    = input.color(#ff4d6d, "مناطق تحت", group=G3, inline="c")
+color  pvCol    = input.color(#f5c518, "الإغلاق", group=G3, inline="c")
+int    lnW      = input.int(2, "سُمك الخطوط", minval=1, maxval=4, group=G3)
+bool   showLbl  = input.bool(true, "إظهار أسماء وأسعار المناطق", group=G3)
+bool   showHist = input.bool(true, "إبقاء مناطق الأيام السابقة", group=G3)
+bool   showTrd  = input.bool(true, "رسم الدخول / الستوب / الهدف", group=G3)
+int    lblOff   = input.int(8, "إزاحة الأسماء (شموع)", minval=1, maxval=100, group=G3)
+
+string G4 = "④ الداشبورد"
+bool   showDash = input.bool(true, "إظهار الداشبورد", group=G4)
+string lang     = input.string("العربية", "اللغة", options=["العربية", "English"], group=G4)
+string posIn    = input.string("أعلى يمين", "المكان", options=["أعلى يمين", "أعلى يسار", "أسفل يمين", "أسفل يسار", "وسط يمين"], group=G4)
+string sizeIn   = input.string("عادي", "الحجم", options=["صغير", "عادي", "كبير"], group=G4)
+
+// ───────────────────────────── دوال مساعدة ─────────────────────────────
+bool ar = lang == "العربية"
+t(string a, string e) => ar ? a : e
+f_p(float x) => na(x) ? "—" : str.tostring(x, format.mintick)
+f_name(int k) => k == 0 ? "CLOSE" : k > 0 ? "R" + str.tostring(k) : "S" + str.tostring(-k)
+f_col(int k) => k == 0 ? pvCol : color.new(k > 0 ? upCol : dnCol, math.min((math.abs(k) - 1) * 9, 60))
+
+// ───────────────────────────── البيانات ─────────────────────────────
+// إغلاق آخر شمعة يومية مكتملة (بدون إعادة رسم)
+[pc, dT] = request.security(srcSym, "D", [close[1], time], lookahead=barmerge.lookahead_on)
+float root = math.sqrt(pc)
+float step = root / divisor
+
+// إغلاق شموع الـ 5 دقائق (يشتغل على شارت 5 دقائق أو أقل)
+bool is5  = timeframe.isminutes and timeframe.multiplier == 5
+bool tfOK = timeframe.in_seconds() <= 300
+[s1, s2] = request.security(syminfo.tickerid, "5", [close[1], close[2]], lookahead=barmerge.lookahead_on)
+bool  new5 = timeframe.change("5")
+float c1   = is5 ? close : s1        // إغلاق شمعة الـ 5 دقائق اللي قفلت
+float c2   = is5 ? close[1] : s2     // الإغلاق اللي قبله
+bool  trig = is5 ? barstate.isconfirmed : new5
+
+// ───────────────────────────── رسم المناطق ─────────────────────────────
+var array<float> lv  = array.new<float>()
+var array<line>  lns = array.new<line>()
+var array<label> lbs = array.new<label>()
+
+bool newDay = dT != dT[1] or (lv.size() == 0 and not na(pc))
+
+if newDay and not na(pc)
+    if lns.size() > 0
+        for i = 0 to lns.size() - 1
+            if showHist
+                line.set_x2(lns.get(i), time)
+            else
+                line.delete(lns.get(i))
+    if lbs.size() > 0
+        for i = 0 to lbs.size() - 1
+            label.delete(lbs.get(i))
+    lns.clear()
+    lbs.clear()
+    lv.clear()
+    for k = -N to N
+        float p = pc + k * step
+        color col = f_col(k)
+        lv.push(p)
+        lns.push(line.new(time, p, time_close, p, xloc=xloc.bar_time, color=col, width=k == 0 ? lnW + 1 : lnW, style=k == 0 ? line.style_solid : line.style_dashed))
+        if showLbl
+            lbs.push(label.new(time, p, f_name(k) + "  " + f_p(p), xloc=xloc.bar_time, style=label.style_label_left, color=color.new(col, 85), textcolor=col, size=size.small))
+
+// مدّ خطوط اليوم الحالي
+int rightX = barstate.islast ? time + timeframe.in_seconds() * 1000 * lblOff : time_close
+if lns.size() > 0
+    for i = 0 to lns.size() - 1
+        line.set_x2(lns.get(i), rightX)
+if barstate.islast and lbs.size() > 0
+    for i = 0 to lbs.size() - 1
+        label.set_x(lbs.get(i), rightX)
+
+// ───────────────────────────── كشف الكسر ─────────────────────────────
+int   sigDir = 0
+int   sigIdx = na
+float sigLvl = na
+if showSig and trig and tfOK and lv.size() > 0 and not na(c1) and not na(c2)
+    for i = 0 to lv.size() - 1
+        if i == N and not usePivot
+            continue
+        float L = lv.get(i)
+        if c2 <= L and c1 > L              // إغلاق فوق المنطقة → شراء (أعلى منطقة اتكسرت)
+            sigDir := 1
+            sigIdx := i
+            sigLvl := L
+        if c2 >= L and c1 < L and sigDir == 0   // إغلاق تحت المنطقة → بيع (أدنى منطقة اتكسرت)
+            sigDir := -1
+            sigIdx := i
+            sigLvl := L
+
+// ───────────────────────────── إدارة الصفقة ─────────────────────────────
+var int    tDir   = 0
+var float  tEntry = na
+var float  tSL    = na
+var float  tTP    = na
+var int    lastDir   = 0
+var float  lastEntry = na
+var float  lastSL    = na
+var float  lastTP    = na
+var string lastLvl   = "—"
+var string lastRes   = ""
+var int    total  = 0
+var int    wins   = 0
+var int    losses = 0
+var float  netPts = 0.0
+var line   eLn = na
+var line   sLn = na
+var line   tLn = na
+
+bool buySig  = false
+bool sellSig = false
+bool tpHit   = false
+bool slHit   = false
+
+// الترتيب: على شارت أقل من 5د الإشارة معروفة مع فتح الشمعة (قبل الخروج)،
+// وعلى شارت 5د الإشارة تتأكد مع الإغلاق (بعد الخروج).
+for phase = 0 to 1
+    if sigDir != 0 and ((phase == 0 and not is5) or (phase == 1 and is5))
+        if tDir != 0 and not oneTrade
+            float pnl = tDir * (c1 - tEntry)
+            netPts += pnl
+            if pnl > 0
+                wins += 1
+            else
+                losses += 1
+            lastRes := "REV"
+            tDir := 0
+        if tDir == 0
+            tDir   := sigDir
+            tEntry := c1
+            tSL    := c1 - sigDir * stopDist
+            int nxt = sigIdx + sigDir
+            float nextLvl = nxt >= 0 and nxt < lv.size() ? lv.get(nxt) : c1 + sigDir * step
+            tTP    := tpMode == "نسبة R:R" ? c1 + sigDir * stopDist * rr : nextLvl
+            total += 1
+            lastDir   := tDir
+            lastEntry := tEntry
+            lastSL    := tSL
+            lastTP    := tTP
+            lastLvl   := f_name(sigIdx - N)
+            lastRes   := ""
+            buySig  := sigDir == 1
+            sellSig := sigDir == -1
+            string side = sigDir == 1 ? "BUY" : "SELL"
+            color  sc   = sigDir == 1 ? upCol : dnCol
+            label.new(bar_index, sigDir == 1 ? low : high, side + "\n" + lastLvl, style=sigDir == 1 ? label.style_label_up : label.style_label_down, color=sc, textcolor=color.black, size=size.small, tooltip=side + " @ " + f_p(tEntry) + "\nSL: " + f_p(tSL) + "\nTP: " + f_p(tTP))
+            if showTrd
+                eLn := line.new(time, tEntry, time_close, tEntry, xloc=xloc.bar_time, color=color.white, width=1, style=line.style_dotted)
+                sLn := line.new(time, tSL, time_close, tSL, xloc=xloc.bar_time, color=#ff1744, width=2)
+                tLn := line.new(time, tTP, time_close, tTP, xloc=xloc.bar_time, color=#00e676, width=2)
+            alert(side + " " + syminfo.ticker + " @ " + f_p(tEntry) + " | SL " + f_p(tSL) + " | TP " + f_p(tTP) + " | " + lastLvl, alert.freq_once_per_bar)
+    if phase == 0 and tDir != 0
+        bool sl = tDir == 1 ? low <= tSL : high >= tSL
+        bool tp = tDir == 1 ? high >= tTP : low <= tTP
+        if sl or tp
+            bool win = tp and not sl      // لو الاتنين في نفس الشمعة نحسبها ستوب (الأسوأ)
+            if win
+                wins += 1
+                netPts += math.abs(tTP - tEntry)
+                lastRes := "TP"
+                tpHit := true
+            else
+                losses += 1
+                netPts -= math.abs(tEntry - tSL)
+                lastRes := "SL"
+                slHit := true
+            tDir := 0
+
+if tDir != 0 and showTrd
+    line.set_x2(eLn, time_close)
+    line.set_x2(sLn, time_close)
+    line.set_x2(tLn, time_close)
+
+plotshape(buySig, "شراء", shape.triangleup, location.belowbar, upCol, size=size.tiny)
+plotshape(sellSig, "بيع", shape.triangledown, location.abovebar, dnCol, size=size.tiny)
+
+alertcondition(buySig, "Gann BUY", "كسر منطقة جان لأعلى بإغلاق 5 دقائق — شراء")
+alertcondition(sellSig, "Gann SELL", "كسر منطقة جان لأسفل بإغلاق 5 دقائق — بيع")
+alertcondition(tpHit, "Gann TP", "تم ضرب الهدف")
+alertcondition(slHit, "Gann SL", "تم ضرب الستوب")
+
+// ───────────────────────────── الداشبورد ─────────────────────────────
+color BG   = #0b1220
+color BG2  = #111a2e
+color KEY  = #8fa3bf
+color VAL  = #e8eef7
+color GOLD = #f5c518
+
+string tSize = switch sizeIn
+    "صغير" => size.small
+    "كبير" => size.large
+    => size.normal
+
+string dPos = switch posIn
+    "أعلى يسار" => position.top_left
+    "أسفل يمين" => position.bottom_right
+    "أسفل يسار" => position.bottom_left
+    "وسط يمين"  => position.middle_right
+    => position.top_right
+
+var table dash = table.new(dPos, 2, 14, bgcolor=BG, frame_color=GOLD, frame_width=2, border_color=#1e2a44, border_width=1)
+
+f_row(int r, string k, string v, color vc) =>
+    color bg = r % 2 == 0 ? BG : BG2
+    table.cell(dash, 0, r, k, text_color=KEY, bgcolor=bg, text_halign=text.align_left, text_size=tSize)
+    table.cell(dash, 1, r, v, text_color=vc, bgcolor=bg, text_halign=text.align_right, text_size=tSize)
+
+if barstate.islast and showDash
+    // أقرب منطقة فوق وتحت السعر
+    float up = na
+    float dn = na
+    int   upK = na
+    int   dnK = na
+    if lv.size() > 0
+        for i = 0 to lv.size() - 1
+            float L = lv.get(i)
+            if L > close and (na(up) or L < up)
+                up := L
+                upK := i - N
+            if L < close and (na(dn) or L > dn)
+                dn := L
+                dnK := i - N
+
+    table.cell(dash, 0, 0, "◆ GANN √ ZONES PRO ◆", text_color=color.black, bgcolor=GOLD, text_size=tSize)
+    table.merge_cells(dash, 0, 0, 1, 0)
+
+    f_row(1, t("المصدر", "Source"), srcSym, VAL)
+    f_row(2, t("إغلاق اليوم", "Daily Close"), f_p(pc), GOLD)
+    f_row(3, t("الجذر ← الخطوة", "√ → Step"), str.tostring(root, "#.##") + " → " + str.tostring(step, "#.##"), VAL)
+    f_row(4, t("السعر الحالي", "Price"), f_p(close), close >= pc ? upCol : dnCol)
+    f_row(5, t("أقرب منطقة فوق", "Next Above"), na(up) ? "—" : f_name(upK) + "  " + f_p(up) + "  (+" + str.tostring(up - close, "#.##") + ")", upCol)
+    f_row(6, t("أقرب منطقة تحت", "Next Below"), na(dn) ? "—" : f_name(dnK) + "  " + f_p(dn) + "  (-" + str.tostring(close - dn, "#.##") + ")", dnCol)
+    f_row(7, t("الاتجاه اليومي", "Daily Bias"), close >= pc ? t("صاعد ▲ فوق الإغلاق", "Bullish ▲") : t("هابط ▼ تحت الإغلاق", "Bearish ▼"), close >= pc ? upCol : dnCol)
+
+    string sigTxt = lastDir == 0 ? "—" : (lastDir == 1 ? t("شراء ▲", "BUY ▲") : t("بيع ▼", "SELL ▼")) + "  " + lastLvl + " @ " + f_p(lastEntry)
+    f_row(8, t("آخر إشارة", "Last Signal"), sigTxt, lastDir == 1 ? upCol : lastDir == -1 ? dnCol : VAL)
+    f_row(9, t("الستوب / الهدف", "SL / TP"), lastDir == 0 ? "—" : f_p(lastSL) + "  /  " + f_p(lastTP), VAL)
+
+    float  flt    = tDir * (close - tEntry)
+    string stTxt  = tDir != 0 ? t("شغالة  ", "ACTIVE  ") + (flt >= 0 ? "+" : "") + str.tostring(flt, "#.##") : lastRes == "TP" ? t("ضربت الهدف ✔", "TP HIT ✔") : lastRes == "SL" ? t("ضربت الستوب ✖", "SL HIT ✖") : lastRes == "REV" ? t("اتقفلت بإشارة عكسية", "REVERSED") : t("في انتظار كسر", "WAITING")
+    color  stCol  = tDir != 0 ? (flt >= 0 ? upCol : dnCol) : lastRes == "TP" ? upCol : lastRes == "SL" ? dnCol : GOLD
+    f_row(10, t("حالة الصفقة", "Trade Status"), stTxt, stCol)
+
+    int closed = wins + losses
+    f_row(11, t("الإشارات (ربح/خسارة)", "Signals (W/L)"), str.tostring(total) + "  (" + str.tostring(wins) + " / " + str.tostring(losses) + ")", VAL)
+    f_row(12, t("نسبة النجاح | الصافي", "Win Rate | Net"), (closed > 0 ? str.tostring(100.0 * wins / closed, "#.#") + "%" : "—") + "  |  " + (netPts >= 0 ? "+" : "") + str.tostring(netPts, "#.##") + "$", netPts >= 0 ? upCol : dnCol)
+    f_row(13, t("الفريم", "Timeframe"), tfOK ? (is5 ? "5m ✔" : t("إشارات 5د على فريم أصغر ✔", "5m signals on LTF ✔")) : t("⚠ استخدم 5 دقائق أو أقل", "⚠ Use 5m or lower"), tfOK ? upCol : #ff9100)
