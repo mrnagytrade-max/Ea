@@ -134,11 +134,22 @@ var float  netPts = 0.0
 var line   eLn = na
 var line   sLn = na
 var line   tLn = na
+var array<label> sigLbs = array.new<label>()
+var array<line>  trdLns = array.new<line>()
 
 bool buySig  = false
 bool sellSig = false
 bool tpHit   = false
 bool slHit   = false
+
+// مع بداية يوم جديد: امسح إشارات وخطوط صفقات الأيام السابقة (ما عدا الصفقة الشغالة)
+if newDay
+    int keepL = tDir != 0 ? 1 : 0
+    while sigLbs.size() > keepL
+        label.delete(sigLbs.shift())
+    int keepT = tDir != 0 and showTrd ? 3 : 0
+    while trdLns.size() > keepT
+        line.delete(trdLns.shift())
 
 // الترتيب: على شارت أقل من 5د الإشارة معروفة مع فتح الشمعة (قبل الخروج)،
 // وعلى شارت 5د الإشارة تتأكد مع الإغلاق (بعد الخروج).
@@ -171,11 +182,14 @@ for phase = 0 to 1
             sellSig := sigDir == -1
             string side = sigDir == 1 ? "BUY" : "SELL"
             color  sc   = sigDir == 1 ? upCol : dnCol
-            label.new(bar_index, sigDir == 1 ? low : high, side + "\n" + lastLvl, style=sigDir == 1 ? label.style_label_up : label.style_label_down, color=sc, textcolor=color.black, size=size.small, tooltip=side + " @ " + f_p(tEntry) + "\nSL: " + f_p(tSL) + "\nTP: " + f_p(tTP))
+            sigLbs.push(label.new(bar_index, sigDir == 1 ? low : high, side + "\n" + lastLvl, style=sigDir == 1 ? label.style_label_up : label.style_label_down, color=sc, textcolor=color.black, size=size.small, tooltip=side + " @ " + f_p(tEntry) + "\nSL: " + f_p(tSL) + "\nTP: " + f_p(tTP)))
             if showTrd
                 eLn := line.new(time, tEntry, time_close, tEntry, xloc=xloc.bar_time, color=color.white, width=1, style=line.style_dotted)
                 sLn := line.new(time, tSL, time_close, tSL, xloc=xloc.bar_time, color=#ff1744, width=2)
                 tLn := line.new(time, tTP, time_close, tTP, xloc=xloc.bar_time, color=#00e676, width=2)
+                trdLns.push(eLn)
+                trdLns.push(sLn)
+                trdLns.push(tLn)
             alert(side + " " + syminfo.ticker + " @ " + f_p(tEntry) + " | SL " + f_p(tSL) + " | TP " + f_p(tTP) + " | " + lastLvl, alert.freq_once_per_bar)
     if phase == 0 and tDir != 0
         bool sl = tDir == 1 ? low <= tSL : high >= tSL
@@ -199,8 +213,6 @@ if tDir != 0 and showTrd
     line.set_x2(sLn, time_close)
     line.set_x2(tLn, time_close)
 
-plotshape(buySig, "شراء", shape.triangleup, location.belowbar, upCol, size=size.tiny)
-plotshape(sellSig, "بيع", shape.triangledown, location.abovebar, dnCol, size=size.tiny)
 
 alertcondition(buySig, "Gann BUY", "كسر منطقة جان لأعلى بإغلاق 5 دقائق — شراء")
 alertcondition(sellSig, "Gann SELL", "كسر منطقة جان لأسفل بإغلاق 5 دقائق — بيع")
