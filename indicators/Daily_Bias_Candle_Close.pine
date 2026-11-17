@@ -1,0 +1,93 @@
+//@version=6
+// ============================================================================
+//  Daily Bias | التحيز اليومي من إغلاقات الشموع  —  Created By Arbah Markets
+//
+//  القواعد (مقارنة آخر شمعة يومية مكتملة بالشمعة التي قبلها):
+//   1) إغلاق بالجسم تحت قاع الشمعة السابقة   → تحيز هابط
+//      إغلاق بالجسم فوق قمة الشمعة السابقة   → تحيز صاعد
+//   2) كسر القاع بالذيل والإغلاق داخل المدى  → تحيز صاعد (سحب سيولة القاع)
+//      كسر القمة بالذيل والإغلاق داخل المدى  → تحيز هابط (سحب سيولة القمة)
+//   3) كسر القمة والقاع بالذيل والإغلاق داخل → لا يوجد تحيز
+//      شمعة داخلية (لا كسر قمة ولا قاع)       → لا يوجد تحيز
+//
+//  يعتمد على شموع مكتملة فقط (لا يعيد الرسم) ويعمل على أي فريم أصغر.
+// ============================================================================
+indicator("Daily Bias | التحيز اليومي", shorttitle="Daily Bias", overlay=true, max_labels_count=500)
+
+// ============================== INPUTS =====================================
+grpMain   = "⚙️ الإعدادات — Settings"
+biasTf    = input.timeframe("D", "فريم التحيز (Bias Timeframe)", group=grpMain)
+showLines = input.bool(true, "عرض قمة/قاع الشمعة السابقة", group=grpMain)
+showBg    = input.bool(true, "تلوين الخلفية حسب التحيز", group=grpMain)
+showLbl   = input.bool(true, "عرض ملصق عند بداية كل يوم", group=grpMain)
+showTbl   = input.bool(true, "عرض لوحة التحيز", group=grpMain)
+tblPos    = input.string("Top Right", "مكان اللوحة", options=["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group=grpMain)
+
+grpCol  = "🎨 الألوان — Colors"
+bullCol = input.color(color.new(#089981, 0), "صاعد", group=grpCol)
+bearCol = input.color(color.new(#F23645, 0), "هابط", group=grpCol)
+neutCol = input.color(color.new(#787B86, 0), "لا يوجد تحيز", group=grpCol)
+bgTransp = input.int(90, "شفافية الخلفية", minval=0, maxval=100, group=grpCol)
+
+// ============================== LOGIC ======================================
+// Case codes:
+//   2 = bullish body close above prior high     -2 = bearish body close below prior low
+//   1 = bullish wick sweep of prior low          -1 = bearish wick sweep of prior high
+//   0 = inside bar (no high/low taken)            3 = outside bar, both sides swept, closed inside
+// Evaluates the last COMPLETED candle (offset 1) against the one before it (offset 2)
+caseCode() =>
+    int c = 0
+    if close[1] > high[2]
+        c := 2
+    else if close[1] < low[2]
+        c := -2
+    else
+        bool tookHigh = high[1] > high[2]
+        bool tookLow  = low[1]  < low[2]
+        c := tookHigh and tookLow ? 3 : tookLow ? 1 : tookHigh ? -1 : 0
+    c
+
+// [1] + lookahead_on = last COMPLETED higher-timeframe candle → no repainting
+[code, refHigh, refLow] = request.security(syminfo.tickerid, biasTf, [caseCode(), high[1], low[1]], lookahead=barmerge.lookahead_on)
+
+bias = code == 2 or code == 1 ? 1 : code == -2 or code == -1 ? -1 : 0
+
+biasCol  = bias == 1 ? bullCol : bias == -1 ? bearCol : neutCol
+biasTxt  = bias == 1 ? "صاعد ▲ BULLISH" : bias == -1 ? "هابط ▼ BEARISH" : "لا يوجد تحيز — NO BIAS"
+reasonTxt = switch code
+    2  => "إغلاق بالجسم فوق القمة السابقة"
+    -2 => "إغلاق بالجسم تحت القاع السابق"
+    1  => "كسر القاع بالذيل وإغلاق داخل المدى"
+    -1 => "كسر القمة بالذيل وإغلاق داخل المدى"
+    3  => "كسر القمة والقاع بالذيل (شمعة ابتلاعية)"
+    => "شمعة داخلية — لا كسر"
+
+newPeriod = timeframe.change(biasTf)
+
+// ============================== VISUALS ====================================
+bgcolor(showBg ? color.new(biasCol, bgTransp) : na, title="Bias Background")
+
+// High / low of the last completed bias candle (the levels to watch today)
+plot(showLines and not newPeriod ? refHigh : na, "Prev High", color=color.new(bullCol, 30), linewidth=1, style=plot.style_linebr)
+plot(showLines and not newPeriod ? refLow  : na, "Prev Low",  color=color.new(bearCol, 30), linewidth=1, style=plot.style_linebr)
+
+if showLbl and newPeriod and not na(code)
+    label.new(bar_index, bias == -1 ? high : low, bias == 1 ? "▲" : bias == -1 ? "▼" : "◆",
+         style=bias == -1 ? label.style_label_down : label.style_label_up,
+         color=biasCol, textcolor=color.white, size=size.small, tooltip=biasTxt + "\n" + reasonTxt)
+
+var table tbl = table.new(tblPos == "Top Right" ? position.top_right : tblPos == "Top Left" ? position.top_left : tblPos == "Bottom Right" ? position.bottom_right : position.bottom_left,
+     2, 3, border_width=1, border_color=color.new(color.gray, 60))
+
+if showTbl and barstate.islast
+    table.cell(tbl, 0, 0, "التحيز اليومي", text_color=color.white, bgcolor=color.new(#131722, 0), text_size=size.normal)
+    table.cell(tbl, 1, 0, biasTxt, text_color=color.white, bgcolor=biasCol, text_size=size.normal)
+    table.cell(tbl, 0, 1, "السبب", text_color=color.white, bgcolor=color.new(#131722, 0), text_size=size.small)
+    table.cell(tbl, 1, 1, reasonTxt, text_color=color.white, bgcolor=color.new(#131722, 0), text_size=size.small)
+    table.cell(tbl, 0, 2, "قمة / قاع سابق", text_color=color.white, bgcolor=color.new(#131722, 0), text_size=size.small)
+    table.cell(tbl, 1, 2, str.tostring(refHigh, format.mintick) + " / " + str.tostring(refLow, format.mintick), text_color=color.white, bgcolor=color.new(#131722, 0), text_size=size.small)
+
+// ============================== ALERTS =====================================
+alertcondition(newPeriod and bias == 1,  "Bullish Bias", "التحيز اليومي صاعد ▲ {{ticker}}")
+alertcondition(newPeriod and bias == -1, "Bearish Bias", "التحيز اليومي هابط ▼ {{ticker}}")
+alertcondition(newPeriod and bias == 0,  "No Bias",      "لا يوجد تحيز يومي {{ticker}}")
